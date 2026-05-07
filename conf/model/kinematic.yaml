@@ -1,0 +1,10 @@
+# conf/model/kinematic.yaml
+# Constant Turn Rate (CTR) kinematic ego-path predictor.
+# Merged into cfg.perception.kinematic_path by the defaults list in conf/config.yaml.
+
+vehicle_width: 2.1   # full ego-vehicle width [m] — sets left/right boundary lateral offset
+horizon_s:     3.0   # prediction time horizon [s]
+n_points:      30    # sample points distributed uniformly over the horizon arc
+min_speed_mps: 8.0   # minimum effective speed fed to the predictor [m/s]
+                     # Prevents a zero-length invisible path when the vehicle is stopped.
+                     # At 8.0 m/s the 3 s horizon always projects ≥ 24 m ahead.

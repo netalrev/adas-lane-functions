@@ -1,0 +1,38 @@
+# conf/model/tracker.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+# Configuration for TrackManager + KalmanTracker.
+#
+# Merged under cfg.perception.tracker via config.yaml defaults list.
+#
+# CLI override examples:
+#   perception.tracker.max_age=8
+#   perception.tracker.min_hits=3
+
+# A track is killed after this many consecutive frames without a matching
+# detection.
+max_age: 5
+
+# A track must be matched at least this many times before it is considered
+# confirmed and included in the output track list.
+min_hits: 2
+
+# Minimum IoU between the predicted track bounding box and a new detection
+# for the two to be considered a valid match during Hungarian assignment.
+iou_threshold: 0.25
+
+# Default inter-frame time (seconds) used when frame timestamps are
+# unavailable or when dt cannot be derived from consecutive frames.
+# Waymo Open Dataset is sampled at 10 Hz → dt = 0.1 s.
+default_dt: 0.1
+
+# ── Kalman filter noise parameters ───────────────────────────────────────────
+# Process noise for position components (x, y in vehicle frame, metres).
+# Higher values allow the filter to track faster lateral manoeuvres.
+process_noise_pos: 0.10
+
+# Process noise for velocity components (vx, vy in vehicle frame, m/s).
+process_noise_vel: 1.00
+
+# Measurement noise for position observations (metres).
+# Reflects the uncertainty in the ground-plane projection from a 2D bbox.
+measurement_noise: 0.50

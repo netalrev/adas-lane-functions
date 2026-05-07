@@ -1,0 +1,39 @@
+# conf/training/hpsearch.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+# Optuna hyper-parameter search configuration.
+# Used by scripts/hpsearch.py.
+#
+# The search overrides the values in conf/training/default.yaml.
+# Any key not listed here keeps its default value.
+
+# ── Optuna settings ───────────────────────────────────────────────────────────
+n_trials: 50
+# Parallel jobs.  Keep 1 on CPU to avoid memory contention.
+n_jobs: 1
+# Optimisation direction for the monitored metric.
+direction: maximize
+# Val metric to maximise (must match a key returned by Trainer.evaluate()).
+metric: cipv_f1
+
+# ── Search space ─────────────────────────────────────────────────────────────
+# For each key, list the categorical choices Optuna will sample from.
+# Prefix "model." → overrides cfg.training.model.*
+# Prefix "training." → overrides cfg.training.training.*
+# Prefix "data." → overrides cfg.training.data.*
+search_space:
+  model.d_model:       [32, 64, 128]
+  model.n_heads:       [2, 4, 8]
+  model.n_layers:      [2, 4, 6]
+  model.d_ff:          [128, 256, 512]
+  model.dropout:       [0.05, 0.1, 0.2, 0.3]
+  training.batch_size: [32, 64, 128]
+  training.learning_rate: [1.0e-4, 5.0e-4, 1.0e-3, 3.0e-3]
+  training.weight_decay:  [1.0e-5, 1.0e-4, 1.0e-3]
+  training.cipv_pos_weight: [3.0, 5.0, 10.0]
+
+# ── Fixed during HP search ────────────────────────────────────────────────────
+# Reduce epochs for speed during search.  The best trial is then re-trained
+# for the full max_epochs defined in default.yaml.
+fixed:
+  training.max_epochs: 20
+  training.lr_schedule: cosine

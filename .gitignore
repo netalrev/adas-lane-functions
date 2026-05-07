@@ -1,0 +1,54 @@
+# ── Python ────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# ── Data files ────────────────────────────────────────────────────────────
+# TFRecords and generated JSONs are too large for git.
+# Reproduce them with: python scripts/download_waymo_segments.py
+*.tfrecord
+*.tfrecord_
+*.gstmp
+src/data/*.json
+src/data/models/
+
+# ── Model weights & exports ───────────────────────────────────────────────
+*.onnx
+*.pt
+*.pth
+*.tflite
+*.engine
+*.plan
+*.bin
+
+# ── Pipeline outputs ──────────────────────────────────────────────────────
+outputs/
+CLRNet/outputs/
+
+# ── C++ build artefacts ────────────────────────────────────────────────────
+cpp/build/
+cpp/_deps/
+
+# ── Hydra runtime ─────────────────────────────────────────────────────────
+.hydra/
+multirun/
+
+# ── Comet ML ──────────────────────────────────────────────────────────────
+.comet.config
+.env
+
+# ── Jupyter ───────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/
+
+# ── IDE ───────────────────────────────────────────────────────────────────
+.idea/
+
+# ── OS ────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db

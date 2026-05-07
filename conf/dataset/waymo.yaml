@@ -1,0 +1,27 @@
+# conf/dataset/waymo.yaml
+# Waymo Open Dataset segment source and batch controls.
+# Merged into cfg.dataset by the defaults list in conf/config.yaml.
+
+# ── Segment source — activate exactly ONE option ──────────────────────────
+# Option A: explicit list file — one .tfrecord path per line, # comments OK
+#   Populated automatically by:  python scripts/download_waymo_segments.py -n 5
+#   Or edited manually with absolute paths.
+segment_list: "segments_to_run.txt"
+
+# Option B: auto-discover all *.tfrecord files recursively under a directory
+segment_dir:  ""
+
+# Option C: single .tfrecord path  (quick test override)
+#   Override on the CLI:  dataset.tfrecord_path=/path/to/segment.tfrecord
+tfrecord_path: ""
+
+# ── Google Cloud Storage reference ────────────────────────────────────────
+# NOT used automatically — download manually with gsutil:
+#   gsutil -m cp "gs://<gcs_prefix>/segment-*.tfrecord" /mnt/c/dev/.../src/data/
+gcs_prefix: "gs://waymo_open_dataset_v_1_4_3/individual_files/training"
+
+# ── Batch controls ─────────────────────────────────────────────────────────
+max_segments:     1      # max segments to run per invocation (null = unlimited)
+max_frames:       500    # max frames to process per segment
+shuffle_segments: false  # randomly sample max_segments from the resolved list
+skip_existing:    false  # skip segments whose .json output file already exists

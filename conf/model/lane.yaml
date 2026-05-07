@@ -1,0 +1,76 @@
+# conf/model/lane.yaml
+# Visual lane detection — active plugin list, thresholds, and model paths.
+# Merged into cfg.perception.lane by the defaults list in conf/config.yaml.
+
+# ── Plugin execution order ─────────────────────────────────────────────────
+# List the plugins to run each frame, in execution order.
+# The LaneManager merges plugin outputs via dict.update(); a plugin listed
+# later overrides the same key from an earlier plugin.
+#
+# Supported values: kinematic | ipm | clrnet | yolopv2
+#
+# Example — single YOLOPv2 pass (DA + LL from one ONNX forward):
+#   active_plugins: [kinematic, yolopv2]
+#
+# Example — hybrid (YOLOPv2 drivable area + IPM host lane):
+#   active_plugins: [kinematic, yolopv2, ipm]
+#   yolopv2:
+#     contributes: drivable   # only publish drivable_* keys
+#   ipm:
+#     contributes: host_lane  # only publish host_* keys
+active_plugins:
+  - kinematic
+  - yolopv2
+
+# Minimum detection confidence [0-1] to publish the host lane as VALID.
+# Both left AND right lane markings must exceed this threshold simultaneously.
+# CLRNet on Waymo (domain shift) typically scores 0.01-0.05.
+# IPM baseline: raise to ~0.35.  YOLOPv2 ll_seg_out coverage: floor at 0.15.
+host_lane_confidence_threshold: 0.01
+
+# ── IPM: classical BEV sliding-window (no trained weights required) ────────
+ipm:
+  n_windows:    9     # number of vertical search windows per lane
+  win_margin:   60    # half-width of each BEV search window [px]
+  win_min_pix:  40    # min inlier pixels to re-centre the next window
+  min_lane_pix: 150   # min total inliers required to report a lane
+  n_sample:     30    # sample points along each fitted polynomial
+
+  # ROI trapezoid in normalised image coordinates [0, 1]  (x: left->right, y: top->bottom)
+  # Lower roi_top_y -> farther field of view.  Larger -> more reliable near-field fit.
+  roi_top_y:         0.55   # horizon cut-off (lower = farther down the road); 0.55 captures ~60 m ahead
+  roi_top_x_half:    0.08   # half-width of trapezoid top, centred on the image
+  roi_bottom_margin: 0.05   # margin from left/right edges at the image bottom
+
+  # Which output keys this plugin publishes.
+  # "all"       -> drivable_raw + drivable_path + host_raw + host_lane
+  # "drivable"  -> drivable_raw + drivable_path only
+  # "host_lane" -> host_raw + host_lane only
+  contributes: all
+
+# ── CLRNet: ONNX-Runtime lane detector (SOTA on CULane / TuSimple) ────────
+clrnet:
+  # Absolute path to the CLRNet ONNX export.  Empty string disables CLRNet.
+  onnx_path:            "/mnt/c/dev/FunctionV1.5/src/data/models/culane_r18.onnx"
+  # CULane-trained weights produce low scores (0.001-0.015) on Waymo imagery
+  # due to domain shift.  Set this to match the expected score distribution.
+  confidence_threshold: 0.005
+  device:               cpu   # cpu | cuda
+
+  # Which output keys this plugin publishes.  See ipm.contributes for values.
+  contributes: all
+
+# ── YOLOPv2: joint drivable-area + lane-line detector ─────────────────────
+# One ONNX forward pass produces both the DA head (Path 3) and LL head (Path 4).
+# Download yolopv2.onnx (~36 MB):
+#   https://github.com/CAIC-AD/YOLOPv2/releases/download/V0.0.1/yolopv2.onnx
+# Place under src/data/models/.  Empty onnx_path -> falls back to disabled.
+yolopv2:
+  onnx_path:         "/mnt/c/dev/FunctionV1.5/src/data/models/yolopv2.onnx"
+  device:            cpu   # cpu | cuda
+  min_drivable_pix:  10    # min drivable pixels per image row to include in centroid [px]
+  ll_conf_threshold: 0.20  # lane-line sigmoid threshold [0-1]; lower = more sensitive
+
+  # Which output keys this plugin publishes.  See ipm.contributes for values.
+  # Set to "drivable" when IPM is also active and should own the host lane.
+  contributes: all

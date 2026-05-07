@@ -1,0 +1,55 @@
+# conf/features/mf.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+# Measurement Feature (MF) vector configuration.
+#
+# Used by:  src/features/mf_assembler.py  (feature construction)
+#           src/features/gt_builder.py    (GT label derivation)
+#           scripts/build_dataset.py      (offline dataset builder)
+
+# ── Temporal window ───────────────────────────────────────────────────────────
+# Number of consecutive frames stacked per training sample.
+window_size: 10
+
+# Feature vector dimension per frame.  Must match the implementation in
+# mf_assembler.py (5 Kalman + 4 pixel + 2 derived + 3 bbox + 4 one-hot = 18).
+feature_dim: 18
+
+# ── Normalization clipping values ─────────────────────────────────────────────
+# All continuous features are clipped to [-1, 1] using these denominators.
+range_clip_m:    80.0    # maximum range (m) before normalisation
+lateral_clip_m:  10.0    # maximum lateral offset (m)
+speed_clip_mps:  30.0    # maximum speed component (m/s)
+ttc_clip_s:      10.0    # maximum TTC (s) — larger TTC is clamped to 1.0
+
+# ── GT builder: CIPV ─────────────────────────────────────────────────────────
+# Minimum range (m) for an object to be CIPV candidate.
+# Objects closer than this are likely already overlapping the ego bumper.
+cipv_min_range_m: 2.0
+
+# Half-width of the ego-lane corridor used to determine if an object is
+# "in path".  Objects with |center_y| > this value are not CIPV candidates.
+# Default = half of a standard 3.7 m lane.
+ego_lane_half_width_m: 1.85
+
+# ── GT builder: Lane Assignment ───────────────────────────────────────────────
+# Assumed lane width in metres (used for integer lane-index computation).
+# lane_assignment = round(center_y / lane_width_m), clipped to [-2, +2].
+lane_width_m: 3.7
+
+# Maximum absolute lane index to assign.  Objects further out are clamped.
+lane_max_idx: 2
+
+# ── GT builder: Cut-In ────────────────────────────────────────────────────────
+# Number of historical frames to inspect for the cut-in detection rule.
+# Cut-In = object transitions from lane_assignment ≠ 0 → 0 in the last N frames.
+cut_in_window_n: 5
+
+# ── GT builder: quality filter ────────────────────────────────────────────────
+# Minimum number of lidar points in a Waymo GT 3D box for it to be used.
+# Boxes with fewer points are considered unreliable (e.g. distant/occluded).
+min_lidar_points: 5
+
+# ── Tracker-to-GT matching ────────────────────────────────────────────────────
+# Maximum Euclidean distance (m) in vehicle frame between a tracker track and
+# a Waymo GT box for them to be considered the same object.
+gt_match_dist_m: 3.0

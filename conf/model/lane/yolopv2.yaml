@@ -1,0 +1,60 @@
+# conf/model/lane/yolopv2.yaml
+# YOLOPv2 multi-task drivable-area + lane-line detector — plugin config.
+#
+# This file documents every parameter that cfg.perception.lane.yolopv2 exposes
+# to YOLOPv2Plugin.  It mirrors the yolopv2: section in conf/model/lane.yaml
+# and is provided as a standalone reference for tuning or future Hydra
+# config-group use.
+#
+# Model: YOLOPv2 (BDD100K-trained, multi-task: detection + DA + LL).
+# Single ONNX forward pass produces ALL three heads; YOLOPv2Plugin uses
+# only the DA (drivable-area) and LL (lane-line) segmentation heads.
+#
+# Download (~36 MB):
+#   https://github.com/CAIC-AD/YOLOPv2/releases/download/V0.0.1/yolopv2.onnx
+# Place under src/data/models/.
+#
+# ONNX single-pass guarantee: the YOLOPv2Plugin calls detect_full() exactly
+# once per frame regardless of the contributes setting.  No second forward
+# pass is made even in "all" mode.
+#
+# Usage in conf/model/lane.yaml:
+#   active_plugins: [kinematic, yolopv2]
+#   yolopv2:
+#     <paste these parameters>
+
+# ── ONNX model ───────────────────────────────────────────────────────────────
+
+# Absolute path to the YOLOPv2 ONNX export file.
+# Empty string disables YOLOPv2Plugin (returns {} gracefully per frame).
+onnx_path: "/mnt/c/dev/FunctionV1.5/src/data/models/yolopv2.onnx"
+
+# Inference device.  "cpu" works on all machines; "cuda" requires
+# onnxruntime-gpu and a CUDA-capable GPU.
+device: cpu
+
+# ── Drivable-area head (Path 3) ──────────────────────────────────────────────
+
+# Minimum number of drivable-area pixels that must be lit in a given image row
+# for that row's centroid to be included in the output polyline [px].
+# Range: 5-50.  Lower = more sensitive (captures narrow lanes at horizon);
+# higher = more conservative (excludes specular reflections on wet roads).
+min_drivable_pix: 10
+
+# ── Lane-line head (Path 4) ──────────────────────────────────────────────────
+
+# Sigmoid confidence threshold applied to the LL segmentation logits [0.0, 1.0].
+# Pixels with sigmoid(logit) >= ll_conf_threshold are counted as lane markings.
+# BDD100K-trained YOLOPv2 on Waymo: typical operating range 0.15-0.35.
+# Lower = more sensitive (captures faded dashes); higher = fewer false positives
+# on urban light artefacts and wet-road reflections.
+ll_conf_threshold: 0.20
+
+# ── Output key control ───────────────────────────────────────────────────────
+# Which canonical output keys this plugin publishes.
+# "all"       -> drivable_raw, drivable_path, host_raw, host_lane
+# "drivable"  -> drivable_raw, drivable_path only
+#                Use when IPM (listed later in active_plugins) should override
+#                the host-lane output with its classical BEV result.
+# "host_lane" -> host_raw, host_lane only
+contributes: all

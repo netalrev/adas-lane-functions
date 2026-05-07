@@ -1,0 +1,67 @@
+# conf/model/lane/ipm.yaml
+# IPM (Inverse Perspective Mapping) classical BEV lane detector — plugin config.
+#
+# This file documents every parameter that cfg.perception.lane.ipm exposes
+# to IPMPlugin.  It mirrors the ipm: section in conf/model/lane.yaml and is
+# provided as a standalone reference for tuning or future Hydra config-group
+# use.  No trained weights are required for IPM.
+#
+# Usage in conf/model/lane.yaml:
+#   active_plugins: [kinematic, ipm]
+#   ipm:
+#     <paste these parameters>
+
+# ── Sliding-window search ────────────────────────────────────────────────────
+
+# Number of vertical search windows stacked per lane side.
+# Range: 5-20.  Fewer = faster, coarser; more = smoother polynomial but
+# slower and noisier on sparse edges.  9 is a reliable default.
+n_windows: 9
+
+# Half-width of each BEV sliding-window search band [px].
+# Range: 30-120.  Narrower = more precise on straight roads; wider = more
+# robust in curves and when the BEV warps lane markings.
+win_margin: 60
+
+# Minimum number of lit pixels inside the current window needed to re-centre
+# the next window on the detected cluster centroid [px].
+# Below this, the next window stays at the same x as the current one.
+# Range: 20-80.
+win_min_pix: 40
+
+# Minimum total inlier pixels across all windows to report a lane as valid.
+# Below this, the side is declared invalid (confidence = 0).
+# Range: 80-300.  Raise on noisy sensors, lower on very short lane markings.
+min_lane_pix: 150
+
+# Number of evenly-spaced points sampled along the fitted polynomial to
+# produce the output polyline.  30 is sufficient for 60 m horizon.
+n_sample: 30
+
+# ── ROI trapezoid in normalised image coordinates [0, 1] ────────────────────
+# x = 0 is left edge, x = 1 is right edge.
+# y = 0 is top of image, y = 1 is bottom (near field).
+# The BEV warp is applied AFTER the ROI crop; parameters are in source-image
+# normalised coordinates, not BEV coordinates.
+
+# Horizon cut-off: rows above this y-ratio are excluded from the BEV search.
+# Lower value = farther look-ahead; higher = safer, more reliable near-field.
+# Range: 0.45-0.70.  0.55 captures approximately 60 m ahead at 1280 px height.
+roi_top_y: 0.55
+
+# Half-width of the top edge of the trapezoidal ROI, centred on the image.
+# Set narrow to exclude oncoming lane markings at the horizon.
+# Range: 0.04-0.20.
+roi_top_x_half: 0.08
+
+# Inset from the left and right image edges applied at the bottom of the ROI.
+# Excludes roadside kerbs and barriers that the BEV histogram mistakes for lanes.
+# Range: 0.02-0.10.
+roi_bottom_margin: 0.05
+
+# ── Output key control ───────────────────────────────────────────────────────
+# Which canonical output keys this plugin publishes.
+# "all"       -> drivable_raw, drivable_path, host_raw, host_lane
+# "drivable"  -> drivable_raw, drivable_path  (keep YOLOPv2 host lane)
+# "host_lane" -> host_raw, host_lane           (keep YOLOPv2 drivable area)
+contributes: all

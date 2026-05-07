@@ -1,0 +1,43 @@
+# conf/model/lane/clrnet.yaml
+# CLRNet ONNX neural lane detector — plugin config.
+#
+# This file documents every parameter that cfg.perception.lane.clrnet exposes
+# to CLRNetPlugin.  It mirrors the clrnet: section in conf/model/lane.yaml and
+# is provided as a standalone reference for tuning or future Hydra config-group
+# use.
+#
+# Model: CLRNet CULane-R18 (ResNet-18 backbone, trained on CULane dataset).
+# Download: https://github.com/Turoad/CLRNet/releases
+# Export: python tools/export.py --config configs/clrnet/culane_r18.py
+#
+# Note on domain shift: CULane-trained weights produce confidence scores of
+# 0.001-0.015 on Waymo Open Dataset imagery.  The confidence_threshold below
+# must be set well below the CULane test-set operating point of 0.5.
+#
+# Usage in conf/model/lane.yaml:
+#   active_plugins: [kinematic, clrnet]
+#   clrnet:
+#     <paste these parameters>
+
+# ── ONNX model ───────────────────────────────────────────────────────────────
+
+# Absolute path to the CLRNet ONNX export file.
+# Empty string disables CLRNet; CLRNetPlugin automatically falls back to IPM.
+onnx_path: "/mnt/c/dev/FunctionV1.5/src/data/models/culane_r18.onnx"
+
+# Detection confidence threshold [0.0, 1.0].
+# Only lane proposals with score >= this value are accepted.
+# CULane-R18 on Waymo: typical range 0.001-0.015.  Set to 0.005 to capture
+# faint dashes while rejecting background noise.
+confidence_threshold: 0.005
+
+# Inference device.  "cpu" works on all machines; "cuda" requires
+# onnxruntime-gpu and a CUDA-capable GPU.
+device: cpu
+
+# ── Output key control ───────────────────────────────────────────────────────
+# Which canonical output keys this plugin publishes.
+# "all"       -> drivable_raw, drivable_path, host_raw, host_lane
+# "drivable"  -> drivable_raw, drivable_path  (keep another plugin's host lane)
+# "host_lane" -> host_raw, host_lane           (keep another plugin's drivable)
+contributes: all

@@ -1,0 +1,14 @@
+# conf/logger/comet.yaml
+# Comet ML experiment tracking credentials and identifiers.
+# Merged into cfg.comet by the defaults list in conf/config.yaml.
+# Override per-run on the command line:  comet.experiment_name="my_run_v2"
+#
+# The API key is read from the COMET_API_KEY environment variable so it is
+# never stored in version control.  Set it before running the pipeline:
+#   export COMET_API_KEY="your-key-here"
+# or add it to a .env file (see .env.example) and source it.
+
+api_key:         "${oc.env:COMET_API_KEY}"        # read from environment — never hardcode
+project_name:    "adas-av-pipeline"               # project bucket in the workspace
+workspace:       "netanelreuven1"                 # Comet ML workspace (username/org)
+experiment_name: "Baseline_Input_Pipeline"        # display name for this run

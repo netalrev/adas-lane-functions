@@ -1,0 +1,14 @@
+# conf/train_config.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+# Hydra composition root for the training pipeline (scripts/train.py).
+# Separate from the main pipeline config so training can be run independently.
+
+defaults:
+  - training: default         # conf/training/default.yaml  → cfg.training
+  - features: mf              # conf/features/mf.yaml       → cfg.features
+  - _self_
+
+# Hydra run output directory (separate from model checkpoints).
+hydra:
+  run:
+    dir: outputs/hydra/train/${now:%Y-%m-%d_%H-%M-%S}

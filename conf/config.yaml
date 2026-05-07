@@ -1,0 +1,36 @@
+# conf/config.yaml — Hydra composition root.
+#
+# Assembles the final config from the files listed in `defaults`.
+# Each entry maps a config group to a YAML choice file; the @PACKAGE suffix
+# controls where its keys land in the merged config tree.
+#
+# Per-run overrides — command-line examples:
+#   dataset.max_frames=10
+#   comet.experiment_name="ablation_v3"
+#   model@perception.lane=lane  (swap the whole lane config group)
+
+defaults:
+  - dataset: waymo                               # conf/dataset/waymo.yaml        → cfg.dataset
+  - model@perception.lane: lane                  # conf/model/lane.yaml           → cfg.perception.lane
+  - model@perception.kinematic_path: kinematic   # conf/model/kinematic.yaml      → cfg.perception.kinematic_path
+  - model@perception.detector: detector          # conf/model/detector.yaml       → cfg.perception.detector
+  - model@perception.tracker: tracker            # conf/model/tracker.yaml        → cfg.perception.tracker
+  - features: mf                                 # conf/features/mf.yaml          → cfg.features
+  - logger@comet: comet                          # conf/logger/comet.yaml         → cfg.comet
+  - _self_                                       # keys below override composed values
+
+# ── Output ────────────────────────────────────────────────────────────────
+output:
+  # Directory for per-segment JSON output files.
+  # Empty string → falls back to the directory containing each tfrecord.
+  output_dir: ""
+
+# ── Visualization ─────────────────────────────────────────────────────────
+visualization:
+  # Path layers rendered on Comet ML annotated images.
+  # Comment out a line to hide that layer.
+  enabled_paths:
+    - kinematic
+    - drivable_path
+    - host_lane
+    # - hdmap

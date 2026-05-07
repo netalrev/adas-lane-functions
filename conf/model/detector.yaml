@@ -1,0 +1,37 @@
+# conf/model/detector.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+# Configuration for TargetDetector (YOLOv8n ONNX).
+#
+# Merged under cfg.perception.detector via config.yaml defaults list.
+#
+# CLI override examples:
+#   perception.detector.confidence_threshold=0.5
+#   perception.detector.occlusion_iou_threshold=0.7
+
+# Path to the YOLOv8n ONNX file.
+# Run scripts/download_models.py once to generate this file.
+# Exported with opset 12 (compatible with torch 1.12.x and onnxruntime ≥ 1.10).
+onnx_path: src/data/models/yolov8n.onnx
+
+# Input resolution fed to the model (must match the export imgsz).
+input_size: 640
+
+# Minimum per-class confidence score to keep a detection.
+confidence_threshold: 0.40
+
+# IoU threshold for Non-Maximum Suppression (NMS) at the detector output.
+nms_iou_threshold: 0.45
+
+# Occlusion filtering: a detection is discarded when the sum of its pairwise
+# IoU with all other detections in the same frame exceeds this value.
+# Keeps only clean, low-occlusion observations for the Kalman tracker.
+occlusion_iou_threshold: 0.60
+
+# COCO class IDs to retain.
+# 0=person  1=bicycle  2=car  3=motorcycle  5=bus  7=truck
+class_whitelist: [0, 1, 2, 3, 5, 7]
+
+# ONNX Runtime execution providers (in priority order).
+# Add "CUDAExecutionProvider" before CPU to enable GPU inference.
+providers:
+  - CPUExecutionProvider

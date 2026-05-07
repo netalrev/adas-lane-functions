@@ -1,0 +1,67 @@
+# conf/training/default.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+# Single source of truth for the MFTransformer training run.
+# All values are accessible via cfg.training.* inside scripts/train.py.
+
+# ── Model architecture ────────────────────────────────────────────────────────
+model:
+  # Dimensionality of the Transformer's internal representation.
+  d_model: 64
+  # Number of self-attention heads.
+  n_heads: 4
+  # Number of TransformerEncoderLayer stacks.
+  n_layers: 4
+  # Feed-forward hidden dimension inside each encoder layer.
+  d_ff: 256
+  # Dropout applied in the encoder and all heads.
+  dropout: 0.1
+  # Must match cfg.features.feature_dim (set in conf/features/mf.yaml).
+  input_dim: 18
+  # Must match cfg.features.window_size (set in conf/features/mf.yaml).
+  seq_len: 10
+
+# ── Training loop ─────────────────────────────────────────────────────────────
+training:
+  batch_size: 64
+  max_epochs: 50
+  learning_rate: 1.0e-3
+  weight_decay:  1.0e-4
+  # Gradient clipping (max L2 norm).  0.0 = disabled.
+  grad_clip: 1.0
+  # LR schedule: "cosine" | "step" | "constant"
+  lr_schedule: cosine
+  warmup_epochs: 3
+
+  # ── Loss configuration ───────────────────────────────────────────────────
+  # BCEWithLogitsLoss positive-class weight for the imbalanced CIPV task.
+  # A CIPV is typically 1 in ~5-10 objects per frame, so weight ≈ 5-10.
+  cipv_pos_weight: 5.0
+  # BCEWithLogitsLoss positive-class weight for the imbalanced cut-in task.
+  cut_in_pos_weight: 5.0
+  # CrossEntropyLoss label smoothing for lane assignment (reduces overconfidence).
+  lane_label_smoothing: 0.1
+
+  # ── Multi-task loss weights ──────────────────────────────────────────────
+  # Total loss = w_cipv * L_cipv + w_lane * L_lane + w_cut_in * L_cut_in
+  loss_weight_cipv:   1.0
+  loss_weight_lane:   1.0
+  loss_weight_cut_in: 0.5
+
+# ── Data ──────────────────────────────────────────────────────────────────────
+data:
+  dataset_path: outputs/dataset.h5
+  # Segment-level fractions (sum must be <= 1.0; remainder goes to test).
+  train_fraction: 0.80
+  val_fraction:   0.10
+  # RNG seed for reproducible segment-level split.
+  seed: 42
+  # DataLoader workers.  Set to 0 on Windows/WSL2 to avoid multiprocessing issues.
+  num_workers: 0
+
+# ── Output ────────────────────────────────────────────────────────────────────
+output:
+  checkpoint_dir: outputs/checkpoints
+  report_dir:     outputs/reports
+  # Validation metric to monitor when saving the best checkpoint.
+  # Options: "cipv_f1", "lane_macro_f1", "cut_in_f1", "total_loss"
+  save_best_metric: cipv_f1
