@@ -1,0 +1,3 @@
+[submodule "CLRNet"]
+	path = CLRNet
+	url = https://github.com/Turoad/CLRNet
