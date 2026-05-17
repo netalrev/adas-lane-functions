@@ -16,22 +16,29 @@ Public API
 Update lifecycle (per frame)
 -----------------------------
 1. Predict   — advance all existing Kalman filters by dt.
-2. Assign    — compute IoU cost matrix (tracks × detections); run
-               Hungarian assignment.
+2. Assign    — two-stage matching:
+     Stage 1: IoU cost matrix (tracks × detections) → Hungarian assignment.
+     Stage 2: unmatched *confirmed* tracks → bounding-box centre-distance
+              matching against still-unmatched detections.
+              Prevents ID jumps when IoU drops due to partial occlusion or
+              bbox drift during coasting frames.
 3. Update    — matched tracks: Kalman update + bbox refresh.
 4. Unmatched detections   → birth new tentative tracks.
-5. Unmatched tracks       → increment miss counter; kill if > max_age.
+5. Unmatched tracks       → increment miss counter; kill when over budget:
+     • tentative tracks  (hits < min_hits): killed after max_age_tentative misses.
+     • confirmed tracks  (hits >= min_hits): killed after max_age_confirmed misses.
 6. Confirm   — tracks with hits >= min_hits become confirmed.
-7. Return    — list of confirmed TrackState objects.
+7. Return    — all confirmed TrackState objects (coasting tracks included,
+              flagged with is_coasting=True).
 
-Assignment algorithm
---------------------
-Uses scipy.optimize.linear_sum_assignment (Hungarian algorithm) when scipy
-is available; falls back to greedy IoU matching otherwise.  For typical
-ADAS scenes (< 50 objects), both produce near-identical results.
-
-IoU cost between a track and a detection is computed in image space using
-the last known bounding box of the track as its predicted position.
+Coasting behaviour
+------------------
+Confirmed tracks that miss a detection are still returned in the output list
+(is_coasting=True) with a Kalman-predicted vehicle-frame position.  The stale
+image bbox is carried forward unchanged.  This gives the MF assembler a
+continuous per-track signal during brief occlusions without creating ID gaps.
+“coasting” is visible to downstream stages via TrackState.is_coasting and
+TrackState.consecutive_misses.
 """
 
 from __future__ import annotations
@@ -81,6 +88,7 @@ class TrackState:
         Human-readable class label.
     bbox_xyxy : np.ndarray, shape (4,)
         Last associated detection bounding box [x1, y1, x2, y2].
+        During coasting frames this is the stale last-seen bbox.
     x_veh : float
         Vehicle-frame range (m), positive = forward.
     y_veh : float
@@ -93,30 +101,42 @@ class TrackState:
         Total frames since track creation.
     hits : int
         Number of frames the track has been matched to a detection.
+    is_coasting : bool
+        True when the track was not matched to any detection this frame.
+        The vehicle-frame position is Kalman-predicted, not measured.
+        Downstream stages (MF assembler) should weight coasting samples
+        lower or mark them as interpolated.
+    consecutive_misses : int
+        Number of consecutive frames since the last successful match.
+        0 = matched this frame.  Increases each missed frame.
     """
-    track_id:   int
-    class_id:   int
-    class_name: str
-    bbox_xyxy:  np.ndarray
-    x_veh:      float
-    y_veh:      float
-    vx_veh:     float
-    vy_veh:     float
-    age:        int
-    hits:       int
+    track_id:           int
+    class_id:           int
+    class_name:         str
+    bbox_xyxy:          np.ndarray
+    x_veh:              float
+    y_veh:              float
+    vx_veh:             float
+    vy_veh:             float
+    age:                int
+    hits:               int
+    is_coasting:        bool = False
+    consecutive_misses: int  = 0
 
     def to_dict(self) -> dict:
         return {
-            "track_id":   self.track_id,
-            "class_id":   self.class_id,
-            "class_name": self.class_name,
-            "bbox_xyxy":  self.bbox_xyxy.tolist(),
-            "x_veh":      self.x_veh,
-            "y_veh":      self.y_veh,
-            "vx_veh":     self.vx_veh,
-            "vy_veh":     self.vy_veh,
-            "age":        self.age,
-            "hits":       self.hits,
+            "track_id":           self.track_id,
+            "class_id":           self.class_id,
+            "class_name":         self.class_name,
+            "bbox_xyxy":          self.bbox_xyxy.tolist(),
+            "x_veh":              self.x_veh,
+            "y_veh":              self.y_veh,
+            "vx_veh":             self.vx_veh,
+            "vy_veh":             self.vy_veh,
+            "age":                self.age,
+            "hits":               self.hits,
+            "is_coasting":        self.is_coasting,
+            "consecutive_misses": self.consecutive_misses,
         }
 
 
@@ -163,13 +183,20 @@ def _assign(
     tracks: list[_Track],
     detections: list[Detection],
     iou_threshold: float,
+    reacquire_dist_px: float,
+    min_hits_confirmed: int,
 ) -> tuple[list[tuple[int, int]], list[int], list[int]]:
     """
-    Assign detections to tracks by maximising IoU.
+    Two-stage assignment: detections to tracks.
+
+    Stage 1 — IoU-based Hungarian (same as before).
+    Stage 2 — Centre-distance fallback for confirmed coasting tracks that
+               were not matched in Stage 1.  Prevents ID jumps when IoU
+               drops because the stale bbox has drifted from the object.
 
     Returns
     -------
-    matched   : list of (track_idx, detection_idx) pairs
+    matched          : list of (track_idx, detection_idx) pairs
     unmatched_tracks : list of track indices without a match
     unmatched_dets   : list of detection indices without a match
     """
@@ -179,7 +206,7 @@ def _assign(
     n_t = len(tracks)
     n_d = len(detections)
 
-    # Build IoU cost matrix (negate for minimisation)
+    # ── Stage 1: IoU-based Hungarian matching ──────────────────────────────
     cost = np.zeros((n_t, n_d), dtype=np.float64)
     for ti, trk in enumerate(tracks):
         for di, det in enumerate(detections):
@@ -191,8 +218,9 @@ def _assign(
     else:
         pairs_all = _greedy_assign(cost)
 
-    matched, unmatched_tracks, unmatched_dets = [], [], []
-    matched_t, matched_d = set(), set()
+    matched:   list[tuple[int, int]] = []
+    matched_t: set[int] = set()
+    matched_d: set[int] = set()
 
     for ti, di in pairs_all:
         if cost[ti, di] >= iou_threshold:
@@ -202,7 +230,44 @@ def _assign(
 
     unmatched_tracks = [i for i in range(n_t) if i not in matched_t]
     unmatched_dets   = [i for i in range(n_d) if i not in matched_d]
+
+    # ── Stage 2: centre-distance re-acquisition for coasting confirmed tracks
+    if reacquire_dist_px > 0 and unmatched_tracks and unmatched_dets:
+        # Only attempt re-acquisition for confirmed tracks that are coasting.
+        # Tentative tracks should not be re-acquired this way — let them die
+        # cleanly so ghost tracks don’t accumulate.
+        candidates = [
+            ti for ti in unmatched_tracks
+            if tracks[ti].hits >= min_hits_confirmed and tracks[ti].misses > 0
+        ]
+        remaining_dets = list(unmatched_dets)  # copy — we’ll shrink it
+
+        for ti in candidates:
+            if not remaining_dets:
+                break
+            trk   = tracks[ti]
+            tcx   = (trk.bbox_xyxy[0] + trk.bbox_xyxy[2]) * 0.5
+            tcy   = (trk.bbox_xyxy[1] + trk.bbox_xyxy[3]) * 0.5
+
+            best_di, best_dist = -1, float("inf")
+            for di in remaining_dets:
+                det = detections[di]
+                dcx = (det.bbox_xyxy[0] + det.bbox_xyxy[2]) * 0.5
+                dcy = (det.bbox_xyxy[1] + det.bbox_xyxy[3]) * 0.5
+                d   = ((dcx - tcx) ** 2 + (dcy - tcy) ** 2) ** 0.5
+                if d < best_dist:
+                    best_dist, best_di = d, di
+
+            if best_di >= 0 and best_dist <= reacquire_dist_px:
+                matched.append((ti, best_di))
+                matched_t.add(ti)
+                remaining_dets.remove(best_di)
+
+        unmatched_tracks = [i for i in unmatched_tracks if i not in matched_t]
+        unmatched_dets   = remaining_dets
+
     return matched, unmatched_tracks, unmatched_dets
+
 
 
 def _greedy_assign(cost: np.ndarray) -> list[tuple[int, int]]:
@@ -238,20 +303,27 @@ class TrackManager:
     """
 
     def __init__(self, cfg: DictConfig) -> None:
-        self._max_age       = int(cfg.max_age)
-        self._min_hits      = int(cfg.min_hits)
-        self._iou_threshold = float(cfg.iou_threshold)
-        self._default_dt    = float(cfg.default_dt)
-        self._q_pos         = float(cfg.process_noise_pos)
-        self._q_vel         = float(cfg.process_noise_vel)
-        self._r_pos         = float(cfg.measurement_noise)
+        # Support both legacy single max_age and the new split params.
+        self._max_age_tentative  = int(getattr(cfg, "max_age_tentative",
+                                               getattr(cfg, "max_age", 3)))
+        self._max_age_confirmed  = int(getattr(cfg, "max_age_confirmed",
+                                               getattr(cfg, "max_age", 12)))
+        self._min_hits           = int(cfg.min_hits)
+        self._iou_threshold      = float(cfg.iou_threshold)
+        self._reacquire_dist_px  = float(getattr(cfg, "reacquire_dist_px", 0))
+        self._default_dt         = float(cfg.default_dt)
+        self._q_pos              = float(cfg.process_noise_pos)
+        self._q_vel              = float(cfg.process_noise_vel)
+        self._r_pos              = float(cfg.measurement_noise)
 
-        self._tracks: list[_Track] = []
-        self._next_id: int = 0
+        self._tracks:   list[_Track] = []
+        self._next_id:  int = 0
 
         log.info(
-            "TrackManager ready — max_age=%d  min_hits=%d  iou_thr=%.2f",
-            self._max_age, self._min_hits, self._iou_threshold,
+            "TrackManager ready — max_age tent/conf=%d/%d  min_hits=%d  "
+            "iou_thr=%.2f  reacquire_px=%.0f",
+            self._max_age_tentative, self._max_age_confirmed,
+            self._min_hits, self._iou_threshold, self._reacquire_dist_px,
         )
 
     def reset(self) -> None:
@@ -299,7 +371,8 @@ class TrackManager:
 
         # 2. Assign detections to tracks
         matched, unmatched_tracks, unmatched_dets = _assign(
-            self._tracks, detections, self._iou_threshold
+            self._tracks, detections, self._iou_threshold,
+            self._reacquire_dist_px, self._min_hits,
         )
 
         # 3. Update matched tracks
@@ -339,26 +412,36 @@ class TrackManager:
             self._tracks.append(trk)
             self._next_id += 1
 
-        # 5. Kill stale tracks
-        self._tracks = [t for t in self._tracks if t.misses <= self._max_age]
+        # 5. Kill stale tracks — different budgets for tentative vs confirmed
+        def _should_kill(t: _Track) -> bool:
+            budget = (
+                self._max_age_confirmed
+                if t.hits >= self._min_hits
+                else self._max_age_tentative
+            )
+            return t.misses > budget
 
-        # 6. Return confirmed track states
+        self._tracks = [t for t in self._tracks if not _should_kill(t)]
+
+        # 6. Return confirmed track states (including coasting tracks)
         output: list[TrackState] = []
         for trk in self._tracks:
             if trk.hits < self._min_hits:
                 continue
             state = trk.kalman.state   # [x, y, vx, vy]
             output.append(TrackState(
-                track_id   = trk.track_id,
-                class_id   = trk.class_id,
-                class_name = trk.class_name,
-                bbox_xyxy  = trk.bbox_xyxy,
-                x_veh      = float(state[0]),
-                y_veh      = float(state[1]),
-                vx_veh     = float(state[2]),
-                vy_veh     = float(state[3]),
-                age        = trk.age,
-                hits       = trk.hits,
+                track_id           = trk.track_id,
+                class_id           = trk.class_id,
+                class_name         = trk.class_name,
+                bbox_xyxy          = trk.bbox_xyxy,
+                x_veh              = float(state[0]),
+                y_veh              = float(state[1]),
+                vx_veh             = float(state[2]),
+                vy_veh             = float(state[3]),
+                age                = trk.age,
+                hits               = trk.hits,
+                is_coasting        = trk.misses > 0,
+                consecutive_misses = trk.misses,
             ))
 
         return output

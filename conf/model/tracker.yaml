@@ -5,20 +5,38 @@
 # Merged under cfg.perception.tracker via config.yaml defaults list.
 #
 # CLI override examples:
-#   perception.tracker.max_age=8
-#   perception.tracker.min_hits=3
+#   perception.tracker.max_age_confirmed=15
+#   perception.tracker.reacquire_dist_px=120
 
-# A track is killed after this many consecutive frames without a matching
-# detection.
+# Tentative tracks (hits < min_hits) are killed after this many consecutive
+# misses.  Keep short to avoid polluting output with ghost tracks.
+max_age_tentative: 3
+
+# Confirmed tracks (hits >= min_hits) survive this many consecutive misses
+# before being killed.  Longer coast allows the Kalman to bridge brief
+# occlusions and re-associate without an ID jump.
+max_age_confirmed: 12
+
+# Kept for backward compatibility (unused when both _tentative/_confirmed
+# are present; acts as fallback for both if they are absent).
 max_age: 5
 
 # A track must be matched at least this many times before it is considered
 # confirmed and included in the output track list.
 min_hits: 2
 
+# ── Primary matching ─────────────────────────────────────────────────────────
 # Minimum IoU between the predicted track bounding box and a new detection
-# for the two to be considered a valid match during Hungarian assignment.
+# for the two to be considered a valid match during Hungarian assignment
+# (Stage 1 of the two-stage matcher).
 iou_threshold: 0.25
+
+# ── Re-acquisition matching (Stage 2) ────────────────────────────────────────
+# After Stage-1 IoU matching, confirmed coasting tracks are re-matched
+# against still-unmatched detections using bounding-box centre distance.
+# A detection is accepted if its centre falls within this pixel radius.
+# Set to 0 to disable Stage-2 matching.
+reacquire_dist_px: 100
 
 # Default inter-frame time (seconds) used when frame timestamps are
 # unavailable or when dt cannot be derived from consecutive frames.
