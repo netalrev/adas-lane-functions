@@ -1,4 +1,22 @@
+from dotenv import load_dotenv
+load_dotenv()  # load .env into os.environ before Hydra resolves ${oc.env:...}
+
 from comet_ml import Experiment  # Must be first import
+
+
+# ---------------------------------------------------------------------------
+# No-op experiment stub — used when COMET_API_KEY is not set so the pipeline
+# runs offline without any changes to the rest of the code.
+# ---------------------------------------------------------------------------
+class _NullExperiment:
+    """Drop-in replacement for comet_ml.Experiment that discards all data."""
+    def set_name(self, *a, **kw):         pass
+    def log_image(self, *a, **kw):        pass
+    def log_metric(self, *a, **kw):       pass
+    def log_asset(self, *a, **kw):        pass
+    def end(self, *a, **kw):              pass
+
+
  # Suppress TF info/warning/error logs
 import os
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
@@ -321,6 +339,17 @@ def _process_segment(
                 step=global_step,
             )
 
+            # Third image: YOLO detections + Kalman tracks on the raw frame.
+            # Kept separate from Annotated_Front_Camera so GT and network
+            # outputs can be compared side-by-side in the Comet image gallery.
+            yolo_canvas = vis.draw_detections_and_tracks(img.copy(), gt_data)
+            yolo_pil    = Image.fromarray(cv2.cvtColor(yolo_canvas, cv2.COLOR_BGR2RGB))
+            experiment.log_image(
+                yolo_pil,
+                name=f"[{seg_name}] YOLO_Detections",
+                step=global_step,
+            )
+
         experiment.log_metric("ego_speed_kmh", ego_speed, step=global_step)
 
     frames_done = len(all_frames_gt)
@@ -349,12 +378,18 @@ def main(cfg: DictConfig):
     print("--- Starting ADAS/AV Batch Input Pipeline ---")
     print(OmegaConf.to_yaml(cfg))
 
-    experiment = Experiment(
-        api_key      = cfg.comet.api_key,
-        project_name = cfg.comet.project_name,
-        workspace    = cfg.comet.workspace,
-    )
-    experiment.set_name(cfg.comet.experiment_name)
+    _api_key = cfg.comet.api_key  # empty string when COMET_API_KEY is not set
+    if _api_key:
+        experiment = Experiment(
+            api_key      = _api_key,
+            project_name = cfg.comet.project_name,
+            workspace    = cfg.comet.workspace,
+        )
+        experiment.set_name(cfg.comet.experiment_name)
+        print("[comet] Logging to Comet ML experiment.")
+    else:
+        experiment = _NullExperiment()
+        print("[comet] COMET_API_KEY not set — running offline (no remote logging).")
 
     # ── Resolve segment list ─────────────────────────────────────────────────
     segments = _resolve_segments(cfg)

@@ -451,6 +451,15 @@ class DebugWindow(QMainWindow):
             cb.toggled.connect(lambda checked, k=key: self._on_path_toggle(k, checked))
             self._path_cbs[key] = cb
             pl.addWidget(cb, i // 2, i % 2)
+        # YOLO detection toggle — separate from path toggles
+        self._cb_yolo = QCheckBox("YOLO Det.")
+        self._cb_yolo.setChecked(True)
+        self._cb_yolo.setToolTip(
+            "Draw YOLO detections (magenta) and Kalman tracks (amber/blue)\n"
+            "when a JSON file is loaded.  Dashed box = coasting track."
+        )
+        self._cb_yolo.toggled.connect(lambda _: self.render(self._idx))
+        pl.addWidget(self._cb_yolo, len(_path_cfg) // 2, len(_path_cfg) % 2)
         rl.addWidget(grp_paths)
 
         # ── Path Data Table ──────────────────────────────────────
@@ -580,6 +589,8 @@ class DebugWindow(QMainWindow):
             ann = draw_boxes(img, gt, idx, self._hl_id)
             if self._enabled_paths:
                 ann = draw_json_paths(ann, gt, self._enabled_paths, self._vis)
+            if self._cb_yolo.isChecked():
+                ann = self._vis.draw_detections_and_tracks(ann, gt)
         else:
             ann = np.zeros((600, 960, 3), dtype=np.uint8)
             cv2.putText(ann, "No image data", (340, 300),
@@ -649,6 +660,8 @@ class DebugWindow(QMainWindow):
             ann = draw_boxes(img, gt, self._idx, self._hl_id)
             if self._enabled_paths:
                 ann = draw_json_paths(ann, gt, self._enabled_paths, self._vis)
+            if self._cb_yolo.isChecked():
+                ann = self._vis.draw_detections_and_tracks(ann, gt)
             self.img_view.set_bgr(ann)
 
     # ── transport controls ────────────────────────────────────

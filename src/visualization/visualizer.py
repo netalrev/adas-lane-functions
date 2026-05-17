@@ -98,6 +98,43 @@ _LABEL_THICKNESS  = 1
 _HUD_FONT       = cv2.FONT_HERSHEY_SIMPLEX
 _HUD_FONT_SCALE = 0.60
 _HUD_THICKNESS  = 1
+
+# YOLO detections / Kalman tracks — visually distinct from GT colors
+_DET_RAW_COLOR: tuple = (200,   0, 200)   # magenta — raw unconfirmed YOLO box
+_DET_COAST_COLOR: tuple = (100, 100, 200) # muted blue — coasting track (no meas)
+_DET_TRACK_COLORS: dict[int, tuple] = {
+    0: (  0, 200, 255),   # vehicle    — amber
+    1: (255, 200,   0),   # pedestrian — sky blue
+    2: (100, 255, 200),   # cyclist    — mint
+    3: (150, 150, 150),   # other      — grey
+}
+
+
+def _draw_dashed_rect(
+    canvas: np.ndarray,
+    x1: int, y1: int, x2: int, y2: int,
+    color: tuple,
+    thickness: int,
+    dash: int = 10,
+) -> None:
+    """Draw a dashed rectangle (used for coasting tracks)."""
+    def _dashed_line(p1, p2):
+        dx = p2[0] - p1[0]; dy = p2[1] - p1[1]
+        dist = (dx * dx + dy * dy) ** 0.5
+        if dist < 1:
+            return
+        step = 2 * dash
+        n    = max(1, int(dist / step))
+        for i in range(n):
+            t0 = i * step / dist
+            t1 = min((i * step + dash) / dist, 1.0)
+            s  = (int(p1[0] + dx * t0), int(p1[1] + dy * t0))
+            e  = (int(p1[0] + dx * t1), int(p1[1] + dy * t1))
+            cv2.line(canvas, s, e, color, thickness, cv2.LINE_AA)
+    _dashed_line((x1, y1), (x2, y1))
+    _dashed_line((x2, y1), (x2, y2))
+    _dashed_line((x2, y2), (x1, y2))
+    _dashed_line((x1, y2), (x1, y1))
 _HUD_LINE_H     = 22
 _HUD_MARGIN     = 10
 _HUD_WIDTH      = 255
@@ -348,6 +385,71 @@ class PerceptionVisualizer:
                 canvas, label,
                 (x1, max(y1 - 5, 12)),
                 _HUD_FONT, 0.45, color, _HUD_THICKNESS, cv2.LINE_AA,
+            )
+        return canvas
+
+    def draw_detections_and_tracks(
+        self,
+        canvas: np.ndarray,
+        gt_data: dict,
+    ) -> np.ndarray:
+        """
+        Draw YOLO detections and confirmed Kalman tracks onto *canvas*.
+
+        Two layers:
+          1. Raw YOLO detections (``gt_data["detections"]``) — thin magenta
+             boxes with a confidence badge.  These are pre-tracking, so they
+             include both confirmed and still-tentative objects.
+          2. Confirmed Kalman tracks (``gt_data["tracks"]``) — thick
+             class-colored boxes.  Coasting tracks (is_coasting=True) are drawn
+             with a dashed border so they are distinguishable from measured
+             observations.  Each box carries a label:
+               T{id}  {conf%}  [{TTC}s]
+        """
+        # -- Layer 1: raw YOLO detections (thin magenta, conf badge) ----------
+        for det in gt_data.get("detections", []):
+            bb = det["bbox_xyxy"]
+            x1, y1 = int(bb[0]), int(bb[1])
+            x2, y2 = int(bb[2]), int(bb[3])
+            cv2.rectangle(canvas, (x1, y1), (x2, y2), _DET_RAW_COLOR, 1)
+            conf = det.get("confidence", 0.0)
+            cv2.putText(
+                canvas, f"{conf:.0%}",
+                (x1, max(y1 - 4, 12)),
+                _HUD_FONT, 0.38, _DET_RAW_COLOR, 1, cv2.LINE_AA,
+            )
+
+        # -- Layer 2: confirmed Kalman tracks ---------------------------------
+        for trk in gt_data.get("tracks", []):
+            bb  = trk["bbox_xyxy"]
+            x1, y1 = int(bb[0]), int(bb[1])
+            x2, y2 = int(bb[2]), int(bb[3])
+            cls_id     = trk.get("class_id", 3)
+            is_coasting = trk.get("is_coasting", False)
+            color       = _DET_COAST_COLOR if is_coasting else _DET_TRACK_COLORS.get(cls_id, _DET_TRACK_COLORS[3])
+
+            if is_coasting:
+                _draw_dashed_rect(canvas, x1, y1, x2, y2, color, 2)
+            else:
+                cv2.rectangle(canvas, (x1, y1), (x2, y2), color, 2)
+
+            # Label: T{id}  {conf%}  [{TTC}s]
+            conf = trk.get("confidence", 1.0)
+            ttc  = trk.get("ttc_s")
+            label = f"T{trk['track_id']}  {conf:.0%}"
+            if ttc is not None:
+                label += f"  {ttc:.1f}s"
+
+            (tw, th), _ = cv2.getTextSize(label, _HUD_FONT, 0.42, 1)
+            lx, ly = x1, max(y1 - 6, 14)
+            cv2.rectangle(
+                canvas,
+                (lx - 2, ly - th - 2), (lx + tw + 2, ly + 2),
+                (10, 10, 20), -1,
+            )
+            cv2.putText(
+                canvas, label,
+                (lx, ly), _HUD_FONT, 0.42, color, 1, cv2.LINE_AA,
             )
         return canvas
 
