@@ -54,3 +54,15 @@ process_noise_vel: 1.00
 # Measurement noise for position observations (metres).
 # Reflects the uncertainty in the ground-plane projection from a 2D bbox.
 measurement_noise: 0.50
+
+# ── TTC-based confidence gate ─────────────────────────────────────────────────
+# Tracks beyond this TTC (seconds) are only passed to downstream stages if
+# their confidence meets the threshold below.  Tracks at or below this TTC
+# are always passed regardless of confidence (safety-critical zone).
+# Set to 0 to disable the gate entirely.
+ttc_gate_s: 2.0
+
+# Minimum detection-confidence required for a track that is outside the
+# critical TTC zone (ttc_s > ttc_gate_s) to survive the output filter.
+# Range: [0, 1].  Typical: 0.45–0.55.
+ttc_conf_threshold: 0.50

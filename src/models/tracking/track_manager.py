@@ -101,6 +101,12 @@ class TrackState:
         Total frames since track creation.
     hits : int
         Number of frames the track has been matched to a detection.
+    confidence : float
+        Confidence score of the last matched detection [0, 1].
+    ttc_s : float
+        Time-to-collision in seconds computed from the Kalman state.
+        ``inf`` when the target is not closing (diverging or stationary).
+        Used by the TTC confidence gate and the MF assembler.
     is_coasting : bool
         True when the track was not matched to any detection this frame.
         The vehicle-frame position is Kalman-predicted, not measured.
@@ -120,8 +126,10 @@ class TrackState:
     vy_veh:             float
     age:                int
     hits:               int
-    is_coasting:        bool = False
-    consecutive_misses: int  = 0
+    confidence:         float = 1.0
+    ttc_s:              float = float('inf')
+    is_coasting:        bool  = False
+    consecutive_misses: int   = 0
 
     def to_dict(self) -> dict:
         return {
@@ -135,6 +143,8 @@ class TrackState:
             "vy_veh":             self.vy_veh,
             "age":                self.age,
             "hits":               self.hits,
+            "confidence":         self.confidence,
+            "ttc_s":              self.ttc_s if self.ttc_s != float('inf') else None,
             "is_coasting":        self.is_coasting,
             "consecutive_misses": self.consecutive_misses,
         }
@@ -146,14 +156,15 @@ class TrackState:
 
 @dataclass
 class _Track:
-    track_id: int
-    class_id: int
-    class_name: str
-    kalman: KalmanTracker
-    bbox_xyxy: np.ndarray    # last known image bbox (used for IoU matching)
-    age:    int = 1
-    hits:   int = 1
-    misses: int = 0
+    track_id:        int
+    class_id:        int
+    class_name:      str
+    kalman:          KalmanTracker
+    bbox_xyxy:       np.ndarray    # last known image bbox (used for IoU matching)
+    age:             int   = 1
+    hits:            int   = 1
+    misses:          int   = 0
+    last_confidence: float = 1.0   # confidence of the last matched detection
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +322,8 @@ class TrackManager:
         self._min_hits           = int(cfg.min_hits)
         self._iou_threshold      = float(cfg.iou_threshold)
         self._reacquire_dist_px  = float(getattr(cfg, "reacquire_dist_px", 0))
+        self._ttc_gate_s         = float(getattr(cfg, "ttc_gate_s", 0.0))
+        self._ttc_conf_threshold = float(getattr(cfg, "ttc_conf_threshold", 0.0))
         self._default_dt         = float(cfg.default_dt)
         self._q_pos              = float(cfg.process_noise_pos)
         self._q_vel              = float(cfg.process_noise_vel)
@@ -381,9 +394,10 @@ class TrackManager:
             det     = detections[di]
             rw_pos  = rw_positions[di]
 
-            trk.bbox_xyxy  = det.bbox_xyxy
-            trk.class_id   = det.class_id
-            trk.class_name = det.class_name
+            trk.bbox_xyxy       = det.bbox_xyxy
+            trk.class_id        = det.class_id
+            trk.class_name      = det.class_name
+            trk.last_confidence = det.confidence
             trk.hits  += 1
             trk.misses = 0
 
@@ -397,17 +411,18 @@ class TrackManager:
             if rw_pos is None:
                 continue   # cannot initialise tracker without a valid position
             trk = _Track(
-                track_id   = self._next_id,
-                class_id   = det.class_id,
-                class_name = det.class_name,
-                kalman     = KalmanTracker(
+                track_id        = self._next_id,
+                class_id        = det.class_id,
+                class_name      = det.class_name,
+                kalman          = KalmanTracker(
                     initial_xy = np.array(rw_pos, dtype=np.float64),
                     dt         = effective_dt,
                     q_pos      = self._q_pos,
                     q_vel      = self._q_vel,
                     r_pos      = self._r_pos,
                 ),
-                bbox_xyxy = det.bbox_xyxy,
+                bbox_xyxy       = det.bbox_xyxy,
+                last_confidence = det.confidence,
             )
             self._tracks.append(trk)
             self._next_id += 1
@@ -424,22 +439,44 @@ class TrackManager:
         self._tracks = [t for t in self._tracks if not _should_kill(t)]
 
         # 6. Return confirmed track states (including coasting tracks)
+        #    Apply TTC confidence gate: tracks beyond ttc_gate_s are suppressed
+        #    when their confidence is below ttc_conf_threshold.
         output: list[TrackState] = []
         for trk in self._tracks:
             if trk.hits < self._min_hits:
                 continue
+
             state = trk.kalman.state   # [x, y, vx, vy]
+            x, y, vx, vy = float(state[0]), float(state[1]), float(state[2]), float(state[3])
+
+            # TTC computation from Kalman state
+            distance = (x * x + y * y) ** 0.5
+            if distance > 1e-6:
+                # Radial closing speed: positive = target approaching ego
+                v_radial = -(vx * x + vy * y) / distance
+                ttc = distance / v_radial if v_radial > 1e-6 else float('inf')
+            else:
+                ttc = float('inf')  # essentially at ego position
+
+            # TTC confidence gate
+            if (self._ttc_gate_s > 0.0
+                    and ttc > self._ttc_gate_s
+                    and trk.last_confidence < self._ttc_conf_threshold):
+                continue  # beyond safe zone and not confident enough
+
             output.append(TrackState(
                 track_id           = trk.track_id,
                 class_id           = trk.class_id,
                 class_name         = trk.class_name,
                 bbox_xyxy          = trk.bbox_xyxy,
-                x_veh              = float(state[0]),
-                y_veh              = float(state[1]),
-                vx_veh             = float(state[2]),
-                vy_veh             = float(state[3]),
+                x_veh              = x,
+                y_veh              = y,
+                vx_veh             = vx,
+                vy_veh             = vy,
                 age                = trk.age,
                 hits               = trk.hits,
+                confidence         = trk.last_confidence,
+                ttc_s              = ttc,
                 is_coasting        = trk.misses > 0,
                 consecutive_misses = trk.misses,
             ))
