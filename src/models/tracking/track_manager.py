@@ -221,7 +221,23 @@ def _assign(
     cost = np.zeros((n_t, n_d), dtype=np.float64)
     for ti, trk in enumerate(tracks):
         for di, det in enumerate(detections):
-            cost[ti, di] = _iou(trk.bbox_xyxy, det.bbox_xyxy)
+            if trk.misses > 0:
+                # Inflate the stale track bbox proportional to how long it
+                # has been coasting.  At close range (CIPV scenario) the
+                # bbox grows rapidly per frame; expanding by 20 % per miss
+                # keeps Stage-1 IoU matching viable until Stage-2 reacquire
+                # takes over.
+                scale = 1.0 + 0.20 * trk.misses
+                cx = (trk.bbox_xyxy[0] + trk.bbox_xyxy[2]) * 0.5
+                cy = (trk.bbox_xyxy[1] + trk.bbox_xyxy[3]) * 0.5
+                hw = (trk.bbox_xyxy[2] - trk.bbox_xyxy[0]) * scale * 0.5
+                hh = (trk.bbox_xyxy[3] - trk.bbox_xyxy[1]) * scale * 0.5
+                inflated = np.array(
+                    [cx - hw, cy - hh, cx + hw, cy + hh], dtype=np.float64
+                )
+                cost[ti, di] = _iou(inflated, det.bbox_xyxy)
+            else:
+                cost[ti, di] = _iou(trk.bbox_xyxy, det.bbox_xyxy)
 
     if _HAS_SCIPY:
         row_ind, col_ind = _hungarian(-cost)   # maximise IoU
@@ -269,7 +285,17 @@ def _assign(
                 if d < best_dist:
                     best_dist, best_di = d, di
 
-            if best_di >= 0 and best_dist <= reacquire_dist_px:
+            # Adaptive radius: at close range the bbox is large and its
+            # centre can shift by hundreds of pixels per frame.  Use half
+            # the bbox diagonal as the effective radius when it exceeds the
+            # configured static value.
+            bw = trk.bbox_xyxy[2] - trk.bbox_xyxy[0]
+            bh = trk.bbox_xyxy[3] - trk.bbox_xyxy[1]
+            adaptive_radius = max(
+                reacquire_dist_px,
+                ((bw * bw + bh * bh) ** 0.5) * 0.5,
+            )
+            if best_di >= 0 and best_dist <= adaptive_radius:
                 matched.append((ti, best_di))
                 matched_t.add(ti)
                 remaining_dets.remove(best_di)
@@ -322,8 +348,6 @@ class TrackManager:
         self._min_hits           = int(cfg.min_hits)
         self._iou_threshold      = float(cfg.iou_threshold)
         self._reacquire_dist_px  = float(getattr(cfg, "reacquire_dist_px", 0))
-        self._ttc_gate_s         = float(getattr(cfg, "ttc_gate_s", 0.0))
-        self._ttc_conf_threshold = float(getattr(cfg, "ttc_conf_threshold", 0.0))
         self._default_dt         = float(cfg.default_dt)
         self._q_pos              = float(cfg.process_noise_pos)
         self._q_vel              = float(cfg.process_noise_vel)
@@ -346,6 +370,44 @@ class TrackManager:
         """
         self._tracks.clear()
         self._next_id = 0
+
+    def _coasting_budget(self, t: _Track) -> int:
+        """
+        Return the maximum number of consecutive missed detections before
+        track *t* is killed.  The budget scales with track maturity so that
+        fleeting false positives are evicted quickly while genuinely
+        established tracks survive brief occlusions.
+
+        Maturity tiers
+        --------------
+        tentative (hits < min_hits)
+            Uses ``max_age_tentative`` — unchanged from prior behaviour.
+            These tracks have not yet been confirmed; the limit is already
+            tight by design.
+
+        just-confirmed (min_hits <= hits < 5)
+            Maximum 1 missed frame.  A track that was confirmed on only a
+            handful of observations has not built enough evidence to be
+            trusted through an occlusion.  Killing after 1 miss prevents
+            a briefly-detected false positive from coasting as a ghost.
+
+        young-confirmed (5 <= hits < 10)
+            Maximum 2 missed frames.  Enough to bridge a single-frame
+            detection hole caused by occlusion without allowing extended
+            phantoms.
+
+        mature (hits >= 10)
+            Full ``max_age_confirmed`` budget.  A track with this many hits
+            has been reliably observed across many frames and has earned the
+            right to coast through genuine occlusion windows.
+        """
+        if t.hits < self._min_hits:
+            return self._max_age_tentative
+        if t.hits < 5:
+            return 1    # just-confirmed: tolerate at most 1 missed frame
+        if t.hits < 10:
+            return 2    # young-confirmed: bridge single-frame holes only
+        return self._max_age_confirmed   # mature: full coasting allowance
 
     def update(
         self,
@@ -427,20 +489,13 @@ class TrackManager:
             self._tracks.append(trk)
             self._next_id += 1
 
-        # 5. Kill stale tracks — different budgets for tentative vs confirmed
+        # 5. Kill stale tracks using a maturity-scaled coasting budget.
         def _should_kill(t: _Track) -> bool:
-            budget = (
-                self._max_age_confirmed
-                if t.hits >= self._min_hits
-                else self._max_age_tentative
-            )
-            return t.misses > budget
+            return t.misses > self._coasting_budget(t)
 
         self._tracks = [t for t in self._tracks if not _should_kill(t)]
 
-        # 6. Return confirmed track states (including coasting tracks)
-        #    Apply TTC confidence gate: tracks beyond ttc_gate_s are suppressed
-        #    when their confidence is below ttc_conf_threshold.
+        # 6. Return confirmed track states (including coasting tracks).
         output: list[TrackState] = []
         for trk in self._tracks:
             if trk.hits < self._min_hits:
@@ -449,20 +504,13 @@ class TrackManager:
             state = trk.kalman.state   # [x, y, vx, vy]
             x, y, vx, vy = float(state[0]), float(state[1]), float(state[2]), float(state[3])
 
-            # TTC computation from Kalman state
+            # TTC computation from Kalman state (used for display only)
             distance = (x * x + y * y) ** 0.5
             if distance > 1e-6:
-                # Radial closing speed: positive = target approaching ego
                 v_radial = -(vx * x + vy * y) / distance
                 ttc = distance / v_radial if v_radial > 1e-6 else float('inf')
             else:
-                ttc = float('inf')  # essentially at ego position
-
-            # TTC confidence gate
-            if (self._ttc_gate_s > 0.0
-                    and ttc > self._ttc_gate_s
-                    and trk.last_confidence < self._ttc_conf_threshold):
-                continue  # beyond safe zone and not confident enough
+                ttc = float('inf')
 
             output.append(TrackState(
                 track_id           = trk.track_id,

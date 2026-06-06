@@ -898,6 +898,180 @@ class PerceptionVisualizer:
         return canvas
 
     # ------------------------------------------------------------------
+    # Public: Vehicle EKF track visualisation
+    # ------------------------------------------------------------------
+
+    def draw_vehicle_ekf_tracks(
+        self,
+        canvas:         np.ndarray,
+        ekf_tracks:     list[dict],
+        lane_relations: list[dict],
+    ) -> np.ndarray:
+        """
+        Draw all confirmed vehicle EKF tracks onto *canvas*.
+
+        Per-track layers
+        ----------------
+        1. **Bbox outline** — color-coded by lane-relation "side":
+               green  = inside drivable / host-lane bounds
+               orange = adjacent (left or right, within ~1 lane width)
+               red    = outside all bounds (or no relation available)
+        2. **Velocity arrow** — 3D velocity vector [vx, vy] projected from the
+           track position in Vehicle Frame and drawn as an arrow to the
+           predicted position 1 s in the future.
+        3. **Info panel** — semi-transparent label below/above the bbox with:
+               EKF{id}  {speed:.1f}m/s  [{TTC}s]
+               {x:.1f}m fwd  {y:.1f}m lat
+               {W:.1f}x{H:.1f}x{L:.1f}m  |  {side} of {best_path}
+
+        Parameters
+        ----------
+        canvas : np.ndarray
+            BGR image to draw on (caller must pass a copy if immutability
+            is needed).
+        ekf_tracks : list[dict]
+            List of VehicleTrackState.to_dict() for this frame
+            (from ``gt_data["vehicle_ekf_tracks"]``).
+        lane_relations : list[dict]
+            List of lane-relation dicts for this frame
+            (from ``gt_data["lane_relations"]``).
+
+        Returns
+        -------
+        np.ndarray
+            *canvas* with EKF overlays drawn in-place.
+        """
+        # Build a lookup from track_id → relation dict for O(1) access
+        rel_by_id: dict[int, dict] = {
+            r["track_id"]: r for r in lane_relations
+        }
+
+        for trk in ekf_tracks:
+            tid   = trk["track_id"]
+            bb    = trk["bbox_xyxy"]          # [x1,y1,x2,y2] image pixels
+            x1, y1, x2, y2 = int(bb[0]), int(bb[1]), int(bb[2]), int(bb[3])
+
+            x_veh = float(trk["x_veh"])
+            y_veh = float(trk["y_veh"])
+            vx    = float(trk["vx_veh"])
+            vy    = float(trk["vy_veh"])
+            spd   = float(trk["speed_mps"])
+            ttc   = trk.get("ttc_s")          # None when not closing
+            w_m   = float(trk["width_m"])
+            h_m   = float(trk["height_m"])
+            l_m   = float(trk["length_m"])
+
+            # ── 1. Determine lane-relation color ─────────────────────────────
+            rel   = rel_by_id.get(tid, {})
+            rels  = rel.get("relations", {})
+
+            # Priority: host_lane > drivable_path > kinematic > hdmap
+            _priority = ["host_lane", "drivable_path", "kinematic", "hdmap"]
+            best_path = "none"
+            best_side = "unknown"
+            best_rel  = {}
+            for p in _priority:
+                r = rels.get(p, {})
+                if r.get("valid", False):
+                    best_path = p
+                    best_side = r.get("side", "unknown")
+                    best_rel  = r
+                    break
+
+            inside = any(
+                rels.get(p, {}).get("inside_bounds", False)
+                for p in ("host_lane", "drivable_path", "hdmap")
+            )
+            if inside:
+                box_color = (20, 200, 20)    # green — inside ego lane
+            elif best_side in ("left", "right"):
+                dist_m = abs(best_rel.get("dist_lateral_m", 99.0))
+                if dist_m < 4.0:
+                    box_color = (0, 160, 255)   # orange — adjacent
+                else:
+                    box_color = (0, 50, 220)    # red — far outside
+            else:
+                box_color = (120, 120, 120)  # grey — no valid relation
+
+            # ── 2. Draw the EKF bounding box ─────────────────────────────────
+            thickness = 3 if not trk.get("is_coasting", False) else 1
+            if trk.get("is_coasting", False):
+                _draw_dashed_rect(canvas, x1, y1, x2, y2, box_color, thickness)
+            else:
+                cv2.rectangle(canvas, (x1, y1), (x2, y2), box_color, thickness)
+
+            # Corner tick marks (distinguish from the plain Kalman bbox)
+            tick = 10
+            for cx_, cy_, dx, dy in [
+                (x1, y1, 1, 1), (x2, y1, -1, 1), (x1, y2, 1, -1), (x2, y2, -1, -1)
+            ]:
+                cv2.line(canvas, (cx_, cy_),
+                         (cx_ + dx * tick, cy_), box_color, 2, cv2.LINE_AA)
+                cv2.line(canvas, (cx_, cy_),
+                         (cx_, cy_ + dy * tick), box_color, 2, cv2.LINE_AA)
+
+            # ── 3. Velocity arrow (project predicted position 1 s ahead) ────
+            pred_x = x_veh + vx * 1.0
+            pred_y = y_veh + vy * 1.0
+            # Only draw when range is in front of the camera
+            if x_veh > 1.0 and pred_x > 1.0:
+                origin_pts = self._project_points(
+                    np.array([[x_veh, y_veh, 0.75]], dtype=np.float64)
+                )
+                pred_pts   = self._project_points(
+                    np.array([[pred_x, pred_y, 0.75]], dtype=np.float64)
+                )
+                if len(origin_pts) > 0 and len(pred_pts) > 0:
+                    op = tuple(origin_pts[0].astype(int))
+                    pp = tuple(pred_pts[0].astype(int))
+                    cv2.arrowedLine(
+                        canvas, op, pp, box_color, 2,
+                        cv2.LINE_AA, tipLength=0.35,
+                    )
+
+            # ── 4. Info panel ─────────────────────────────────────────────────
+            ttc_str = f"  {ttc:.1f}s" if ttc is not None else ""
+            coast   = " [C]" if trk.get("is_coasting", False) else ""
+            lines   = [
+                f"EKF{tid}{coast}  {spd:.1f}m/s{ttc_str}",
+                f"{x_veh:.1f}m  {y_veh:+.1f}m lat",
+                f"{w_m:.1f}x{h_m:.1f}x{l_m:.1f}m",
+                f"{best_side} / {best_path.replace('_', ' ')}",
+            ]
+            line_h  = 15
+            pad_x   = 4
+            panel_w = 185
+            panel_h = len(lines) * line_h + pad_x * 2
+
+            # Place panel above the bbox if it fits, else below
+            if y1 - panel_h - 4 >= 0:
+                panel_y0 = y1 - panel_h - 4
+            else:
+                panel_y0 = y2 + 4
+            panel_x0 = max(0, min(x1, canvas.shape[1] - panel_w))
+
+            overlay = canvas.copy()
+            cv2.rectangle(overlay,
+                          (panel_x0, panel_y0),
+                          (panel_x0 + panel_w, panel_y0 + panel_h),
+                          (10, 10, 20), -1)
+            cv2.addWeighted(overlay, 0.72, canvas, 0.28, 0, canvas)
+            cv2.rectangle(canvas,
+                          (panel_x0, panel_y0),
+                          (panel_x0 + panel_w, panel_y0 + panel_h),
+                          box_color, 1)
+
+            for li, text in enumerate(lines):
+                ty = panel_y0 + pad_x + (li + 1) * line_h - 2
+                cv2.putText(
+                    canvas, text,
+                    (panel_x0 + pad_x + 2, ty),
+                    _HUD_FONT, 0.38, (255, 255, 255), 1, cv2.LINE_AA,
+                )
+
+        return canvas
+
+    # ------------------------------------------------------------------
     # Public: convenience all-in-one method
     # ------------------------------------------------------------------
 
