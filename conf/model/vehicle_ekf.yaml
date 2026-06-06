@@ -1,0 +1,77 @@
+# conf/model/vehicle_ekf.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+# VehicleTrackManager + VehicleEKF configuration.
+# Merged under cfg.perception.vehicle_ekf via the defaults list in config.yaml.
+#
+# CLI override examples:
+#   perception.vehicle_ekf.measurement_noise_pos=1.0
+#   perception.vehicle_ekf.min_hits=3
+
+# ── Track lifecycle ───────────────────────────────────────────────────────────
+# Tentative tracks (hits < min_hits) are killed after this many consecutive
+# misses.  Short budget keeps ghost vehicles from appearing in output.
+max_age_tentative: 3
+
+# Confirmed mature tracks survive this many consecutive misses (full occlusion
+# tolerance).  Mirrors the value used in the general TrackManager.
+max_age_confirmed: 12
+
+# Minimum matched-detection count before a track is reported in output.
+# Set to 2 (stricter than the general tracker) to reduce false positives.
+min_hits: 2
+
+# ── Assignment ────────────────────────────────────────────────────────────────
+# Minimum IoU for Stage-1 (Hungarian) matching.
+iou_threshold: 0.25
+
+# Bbox centre-pixel radius for Stage-2 (re-acquisition) matching.
+# Set to 0 to disable Stage-2.
+reacquire_dist_px: 100
+
+# Default inter-frame time (s) used when dt cannot be derived from timestamps.
+# Waymo Open Dataset is sampled at 10 Hz.
+default_dt: 0.1
+
+# ── Camera focal length priors ────────────────────────────────────────────────
+# Used to convert bbox pixel dimensions into perspective aspect-ratio
+# measurements (h_aspect = bbox_h_px / fy, w_aspect = bbox_w_px / fx).
+# These are INITIAL values only — VehicleTrackManager.set_focal_lengths()
+# is called at step == 0 with the real values from the Waymo calibration proto.
+# Typical Waymo front camera focal lengths (varies by sensor unit):
+fx: 2000.0
+fy: 2000.0
+
+# ── EKF process noise (standard deviations) ──────────────────────────────────
+# These model how much the true state can change between frames.
+# Higher values → filter responds faster but is noisier.
+
+# Position (x, y) in Vehicle Frame (m).
+# 0.10 m/step matches the existing KalmanTracker; increase for erratic drivers.
+process_noise_pos: 0.10
+
+# Velocity (vx, vy) in Vehicle Frame (m/s).
+# 1.00 m/s allows the filter to track braking/accelerating manoeuvres.
+process_noise_vel: 1.00
+
+# Heading (rad).
+# 0.05 rad/step ≈ 3 deg/step — slow heading change assumption.
+process_noise_heading: 0.05
+
+# Width and height (m).
+# 0.05 m — vehicle dimensions change very slowly; stronger constraint = EMA-like.
+process_noise_size: 0.05
+
+# Length (m) — weakly observable from a front camera; higher noise = less
+# constraint on an unobservable dimension.
+process_noise_length: 0.10
+
+# ── EKF measurement noise (standard deviations) ──────────────────────────────
+# These model the expected uncertainty in each measurement type.
+
+# Ground-projection position uncertainty (m).
+# 0.50 m reflects pinhole projection + ground-plane assumption error at ~20 m.
+measurement_noise_pos: 0.50
+
+# Perspective aspect-ratio uncertainty (dimensionless m/m ratio).
+# 0.05 balances sensitivity to real size changes vs bbox quantisation noise.
+measurement_noise_aspect: 0.05
