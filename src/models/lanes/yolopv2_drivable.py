@@ -115,6 +115,8 @@ class YOLOPv2DrivableDetector:
         min_drivable_pix: int   = 30,
         host_conf_thresh: float = 0.35,
         ll_threshold:     float = 0.30,
+        track_half:       int   = 80,
+        coeff_ema_alpha:  float = 0.25,
     ) -> None:
         try:
             import onnxruntime as ort
@@ -125,9 +127,11 @@ class YOLOPv2DrivableDetector:
                 "pip install onnxruntime-gpu         (CUDA)"
             ) from exc
 
-        self.image_width      = image_width
-        self.image_height     = image_height
-        self.min_drivable_pix = min_drivable_pix
+        self.image_width       = image_width
+        self.image_height      = image_height
+        self.min_drivable_pix  = min_drivable_pix
+        self._track_half       = track_half
+        self._coeff_ema_alpha  = coeff_ema_alpha
 
         providers = (
             ["CUDAExecutionProvider", "CPUExecutionProvider"]
@@ -195,6 +199,19 @@ class YOLOPv2DrivableDetector:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def flush_ll_cache(self) -> None:
+        """
+        Flush only the lane-line EMA and persistence caches.
+
+        Called when the ego vehicle speed drops below the minimum threshold
+        (e.g. stopped at an intersection) so that crosswalk / stop-line
+        geometry does not corrupt the polynomial EMA that will be used once
+        the vehicle starts moving again.
+        """
+        self._cached_lane_result = None
+        self._lane_cache_age     = 0
+        self._prev_ll_coeffs     = {"left": None, "right": None}
 
     def reset_segment_state(self) -> None:
         """
@@ -522,8 +539,7 @@ class YOLOPv2DrivableDetector:
 
         # FAR_FRAC is still used by _fit_poly for the horizon corridor check.
         FAR_FRAC   = 0.12
-        TRACK_HALF = 80    # per-row tracking window half-width (px); wider for sharp curves
-        PEAK_EXCL  = 200   # neighbourhood to blank after finding the dominant peak
+        TRACK_HALF = self._track_half   # per-row tracking window half-width (px); wider for sharp curves
 
         # ── Histogram initialisation ─────────────────────────────────────────
         # Sum the bottom 30 % of the active scan region column-by-column.
@@ -536,30 +552,18 @@ class YOLOPv2DrivableDetector:
         kernel    = np.ones(smooth_w, dtype=np.float64) / smooth_w
         histogram = np.convolve(histogram, kernel, mode="same")
 
-        # Find the two dominant peaks in the full histogram.
-        # Peak 1: global maximum.
-        peak1: Optional[int] = int(np.argmax(histogram)) if histogram.max() > 0 else None
+        # Search each image half independently so that a dominant noise
+        # feature on one side cannot steal the anchor for the other side.
+        # Left anchor: strongest peak in [0, cx); right anchor: strongest
+        # peak in [cx, src_w).  This mirrors IPM's corridor-restricted
+        # histogram and is more robust at multi-lane intersections.
+        left_hist  = histogram[:cx]
+        right_hist = histogram[cx:]
+        peak1: Optional[int] = int(np.argmax(left_hist))  if left_hist.max()  > 0 else None
+        peak2: Optional[int] = (int(np.argmax(right_hist)) + cx) if right_hist.max() > 0 else None
 
-        # Peak 2: global maximum after blanking the neighbourhood of peak1
-        # so a single wide marking does not claim both anchors.
-        peak2: Optional[int] = None
-        if peak1 is not None:
-            hist_copy = histogram.copy()
-            hist_copy[max(0, peak1 - PEAK_EXCL):min(src_w, peak1 + PEAK_EXCL)] = 0.0
-            if hist_copy.max() > 0:
-                peak2 = int(np.argmax(hist_copy))
-
-        # Assign anchors: left = smaller x, right = larger x.
-        # When only one peak is found, fall back to the image-centre heuristic.
-        if peak1 is not None and peak2 is not None:
-            prev_left_x:  Optional[int] = min(peak1, peak2)
-            prev_right_x: Optional[int] = max(peak1, peak2)
-        elif peak1 is not None:
-            prev_left_x  = peak1 if peak1 < cx else None
-            prev_right_x = peak1 if peak1 >= cx else None
-        else:
-            prev_left_x  = None
-            prev_right_x = None
+        prev_left_x:  Optional[int] = peak1
+        prev_right_x: Optional[int] = peak2
 
         left_raw:  list[list[int]] = []
         right_raw: list[list[int]] = []
@@ -627,14 +631,18 @@ class YOLOPv2DrivableDetector:
                 coeffs = raw_coeffs
 
             # EMA smoothing: blend fresh coefficients with the previous frame's
-            # smoothed values.  Cache is only updated on a successful fit.
+            # smoothed values.  The cache update is deferred to AFTER all
+            # validation checks so a failing frame never corrupts the running
+            # average — the next valid frame will still blend from the last
+            # good polynomial.
             prev_ll = self._prev_ll_coeffs.get(side)
             if prev_ll is not None:
-                coeffs = (
-                    _COEFF_EMA_ALPHA * coeffs
-                    + (1.0 - _COEFF_EMA_ALPHA) * prev_ll
+                blended = (
+                    self._coeff_ema_alpha * coeffs
+                    + (1.0 - self._coeff_ema_alpha) * prev_ll
                 )
-            self._prev_ll_coeffs[side] = coeffs.copy()
+            else:
+                blended = coeffs
 
             # Bound drawing strictly to observed data.  The ego-hood occludes
             # lane lines, so collected pts often stop hundreds of pixels above
@@ -642,7 +650,7 @@ class YOLOPv2DrivableDetector:
             # domain (below max_obs_y) produces wild extrapolation tails.
             max_obs_y = float(max(p[1] for p in pts))
             ys = np.linspace(max_obs_y, y_end, n_steps, dtype=np.float64)
-            xs = np.polyval(coeffs, ys).clip(0.0, float(src_w - 1))
+            xs = np.polyval(blended, ys).clip(0.0, float(src_w - 1))
 
             # Side plausibility: mean x must be on the correct image half.
             if side == "left"  and xs.mean() >= src_w * 0.70:
@@ -650,22 +658,33 @@ class YOLOPv2DrivableDetector:
             if side == "right" and xs.mean() <= src_w * 0.30:
                 return None
 
-            # Top (horizon) corridor check: the horizon extrapolation must stay
-            # within the far-field corridor and on the correct side of centre.
-            # cx is the strict inner bound — valid converging lanes naturally
-            # project very close to the vanishing point.
+            # Horizon corridor check: the far-field x must lie within a wide
+            # symmetric band around the image centre.  The previous strict
+            # "top_x >= cx" (left) / "top_x <= cx" (right) constraints
+            # rejected valid curved-road fits because on any curve the
+            # vanishing point shifts left or right, moving both lanes'
+            # horizon intersections across the image centreline.  We now
+            # only reject fits that are wildly outside the corridor, and
+            # we do NOT flush the EMA on failure so the next good frame
+            # can still blend from the last valid polynomial.
             top_x        = float(xs[-1])
-            max_half_top = int(src_w * FAR_FRAC)
-            if side == "left"  and (top_x >= cx or top_x < cx - max_half_top):
-                self._prev_ll_coeffs[side] = None  # flush EMA: diverging fit must not persist
+            max_half_top = int(src_w * FAR_FRAC * 2.5)   # ±0.30 × src_w
+            if abs(top_x - cx) > max_half_top:
                 return None
-            if side == "right" and (top_x <= cx or top_x > cx + max_half_top):
-                self._prev_ll_coeffs[side] = None
-                return None
+
+            # All checks passed — commit the blended coefficients to EMA cache.
+            self._prev_ll_coeffs[side] = blended.copy()
             return np.column_stack([xs.astype(np.int32), ys.astype(np.int32)])
 
         left_img  = _fit_poly(left_raw,  "left")
         right_img = _fit_poly(right_raw, "right")
+
+        # Zero out tracker-coverage confidence for any side whose polynomial
+        # fit failed.  A non-zero confidence with no geometry is misleading
+        # and causes host_lane to report high confidence_left/right while
+        # publishing an empty point array.
+        if left_img  is None: lconf = 0.0
+        if right_img is None: rconf = 0.0
 
         # Crossing guard + bottom width guard
         if left_img is not None and right_img is not None:
@@ -788,8 +807,8 @@ class YOLOPv2DrivableDetector:
         # smoothing here stabilises the entire drivable corridor at once.
         if self._prev_boundary_coeffs is not None:
             coeffs = (
-                _COEFF_EMA_ALPHA * coeffs
-                + (1.0 - _COEFF_EMA_ALPHA) * self._prev_boundary_coeffs
+                self._coeff_ema_alpha * coeffs
+                + (1.0 - self._coeff_ema_alpha) * self._prev_boundary_coeffs
             )
         self._prev_boundary_coeffs = coeffs.copy()
 
@@ -861,8 +880,8 @@ class YOLOPv2DrivableDetector:
         # polynomial still tracks genuine road curvature changes.
         if self._prev_center_coeffs is not None:
             coeffs = (
-                _COEFF_EMA_ALPHA * coeffs
-                + (1.0 - _COEFF_EMA_ALPHA) * self._prev_center_coeffs
+                self._coeff_ema_alpha * coeffs
+                + (1.0 - self._coeff_ema_alpha) * self._prev_center_coeffs
             )
         self._prev_center_coeffs = coeffs.copy()
 
@@ -995,7 +1014,8 @@ class YOLOPv2Plugin(AbstractLaneDetector):
         lane_cfg          = cfg.perception.lane
         yolopv2_cfg       = getattr(lane_cfg, "yolopv2", None)
         host_conf         = float(getattr(lane_cfg, "host_lane_confidence_threshold", 0.01))
-        self._contributes = "all"
+        self._contributes   = "all"
+        self._min_speed_mps = float(getattr(yolopv2_cfg, "min_speed_mps", 3.0)) if yolopv2_cfg is not None else 3.0
         self._detector: Optional[YOLOPv2DrivableDetector] = None
 
         if yolopv2_cfg is None:
@@ -1018,6 +1038,8 @@ class YOLOPv2Plugin(AbstractLaneDetector):
                 min_drivable_pix = int(getattr(yolopv2_cfg, "min_drivable_pix", 30)),
                 host_conf_thresh = host_conf,
                 ll_threshold     = float(getattr(yolopv2_cfg, "ll_conf_threshold", 0.30)),
+                track_half       = int(getattr(yolopv2_cfg, "track_half", 80)),
+                coeff_ema_alpha  = float(getattr(yolopv2_cfg, "coeff_ema_alpha", 0.25)),
             )
             log.info(
                 "YOLOPv2Plugin: ONNX loaded  ll_thresh=%.2f  host_conf=%.2f  contributes=%s",
@@ -1037,6 +1059,14 @@ class YOLOPv2Plugin(AbstractLaneDetector):
         if frame_bgr is None or self._detector is None:
             return {}
 
+        # Speed gate: at intersections / stops the LL head picks up crosswalk
+        # stripes as lane lines.  Below the minimum speed we flush the lane-line
+        # EMA cache (so garbage geometry does not bleed into the next road
+        # section) and publish nothing for the host lane.
+        below_speed = vehicle_state.speed_mps < self._min_speed_mps
+        if below_speed and self._contributes in ("host_lane", "all"):
+            self._detector.flush_ll_cache()
+
         # Single ONNX forward pass — both drivable-area and lane-line
         # tensors are extracted from the same network output.
         drivable_raw, host_raw = self._detector.detect_full(frame_bgr)
@@ -1045,7 +1075,7 @@ class YOLOPv2Plugin(AbstractLaneDetector):
         if self._contributes in ("drivable", "all"):
             result["drivable_raw"]  = drivable_raw
             result["drivable_path"] = DrivablePathStrategy.package(drivable_raw)
-        if self._contributes in ("host_lane", "all"):
+        if self._contributes in ("host_lane", "all") and not below_speed:
             result["host_raw"]  = host_raw
             result["host_lane"] = HostLaneStrategy.package(host_raw)
         return result
