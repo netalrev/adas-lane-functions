@@ -17,21 +17,21 @@ onnx_path: src/data/models/yolov8n.onnx
 input_size: 640
 
 # Minimum per-class confidence score to keep a detection.
-confidence_threshold: 0.40
+# Lowered to 0.25 to show all network outputs with minimal filtering.
+confidence_threshold: 0.25
 
 # IoU threshold for Non-Maximum Suppression (NMS) at the detector output.
+# Same-class duplicate boxes above this overlap are collapsed to the highest-
+# confidence box.  Standard value for YOLOv8.
 nms_iou_threshold: 0.45
 
-# Occlusion filtering: a detection is discarded when the sum of its pairwise
-# IoU with all other detections in the same frame exceeds this value.
-# Keeps only clean, low-occlusion observations for the Kalman tracker.
-occlusion_iou_threshold: 0.60
-
-# COCO class IDs to retain.
+# COCO class IDs to retain.  Empty list = accept all 80 COCO classes.
 # 0=person  1=bicycle  2=car  3=motorcycle  5=bus  7=truck
-class_whitelist: [0, 1, 2, 3, 5, 7]
+class_whitelist: []
 
 # ONNX Runtime execution providers (in priority order).
-# Add "CUDAExecutionProvider" before CPU to enable GPU inference.
+# CUDAExecutionProvider is tried first; ONNX Runtime silently falls back to
+# CPUExecutionProvider if no compatible GPU / CUDA toolkit is found.
 providers:
+  - CUDAExecutionProvider
   - CPUExecutionProvider

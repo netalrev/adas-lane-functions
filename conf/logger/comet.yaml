@@ -8,7 +8,7 @@
 #   export COMET_API_KEY="your-key-here"
 # or add it to a .env file (see .env.example) and source it.
 
-api_key:         "${oc.env:COMET_API_KEY}"        # read from environment — never hardcode
+api_key:         "${oc.env:COMET_API_KEY,}"       # read from environment — empty string when unset (no crash)
 project_name:    "adas-av-pipeline"               # project bucket in the workspace
 workspace:       "netanelreuven1"                 # Comet ML workspace (username/org)
 experiment_name: "Baseline_Input_Pipeline"        # display name for this run

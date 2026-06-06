@@ -10,13 +10,14 @@
 #   model@perception.lane=lane  (swap the whole lane config group)
 
 defaults:
-  - dataset: waymo                               # conf/dataset/waymo.yaml        → cfg.dataset
-  - model@perception.lane: lane                  # conf/model/lane.yaml           → cfg.perception.lane
-  - model@perception.kinematic_path: kinematic   # conf/model/kinematic.yaml      → cfg.perception.kinematic_path
-  - model@perception.detector: detector          # conf/model/detector.yaml       → cfg.perception.detector
-  - model@perception.tracker: tracker            # conf/model/tracker.yaml        → cfg.perception.tracker
-  - features: mf                                 # conf/features/mf.yaml          → cfg.features
-  - logger@comet: comet                          # conf/logger/comet.yaml         → cfg.comet
+  - dataset: waymo                               # conf/dataset/waymo.yaml            → cfg.dataset
+  - model@perception.lane: lane                  # conf/model/lane.yaml               → cfg.perception.lane
+  - model@perception.kinematic_path: kinematic   # conf/model/kinematic.yaml          → cfg.perception.kinematic_path
+  - model@perception.detector: detector          # conf/model/detector.yaml           → cfg.perception.detector
+  - model@perception.tracker: tracker            # conf/model/tracker.yaml            → cfg.perception.tracker
+  - model@perception.vehicle_ekf: vehicle_ekf    # conf/model/vehicle_ekf.yaml        → cfg.perception.vehicle_ekf
+  - features: mf                                 # conf/features/mf.yaml              → cfg.features
+  - logger@comet: comet                          # conf/logger/comet.yaml             → cfg.comet
   - _self_                                       # keys below override composed values
 
 # ── Output ────────────────────────────────────────────────────────────────

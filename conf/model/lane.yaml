@@ -24,9 +24,9 @@ active_plugins:
 
 # Minimum detection confidence [0-1] to publish the host lane as VALID.
 # Both left AND right lane markings must exceed this threshold simultaneously.
-# CLRNet on Waymo (domain shift) typically scores 0.01-0.05.
-# IPM baseline: raise to ~0.35.  YOLOPv2 ll_seg_out coverage: floor at 0.15.
-host_lane_confidence_threshold: 0.01
+# Good YOLOPv2 highway frames score 0.64-0.81; intersection/crosswalk frames
+# score 0.15-0.35.  Set at 0.35 to reject low-quality detections.
+host_lane_confidence_threshold: 0.35
 
 # ── IPM: classical BEV sliding-window (no trained weights required) ────────
 ipm:
@@ -67,9 +67,12 @@ clrnet:
 # Place under src/data/models/.  Empty onnx_path -> falls back to disabled.
 yolopv2:
   onnx_path:         "/mnt/c/dev/FunctionV1.5/src/data/models/yolopv2.onnx"
-  device:            cpu   # cpu | cuda
+  device:            cuda  # cpu | cuda — ONNX Runtime falls back to CPU if no GPU is found
   min_drivable_pix:  10    # min drivable pixels per image row to include in centroid [px]
   ll_conf_threshold: 0.20  # lane-line sigmoid threshold [0-1]; lower = more sensitive
+  track_half:        80    # per-row tracker window half-width [px]; tighter → less adjacent-lane drift
+  coeff_ema_alpha:   0.25  # EMA weight for fresh polynomial coefficients [0-1]; lower → more temporal smoothing
+  min_speed_mps:     3.0   # below this speed [m/s] host lane is suppressed (intersection / stop protection)
 
   # Which output keys this plugin publishes.  See ipm.contributes for values.
   # Set to "drivable" when IPM is also active and should own the host lane.

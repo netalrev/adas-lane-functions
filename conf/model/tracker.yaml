@@ -23,7 +23,7 @@ max_age: 5
 
 # A track must be matched at least this many times before it is considered
 # confirmed and included in the output track list.
-min_hits: 2
+min_hits: 1
 
 # ── Primary matching ─────────────────────────────────────────────────────────
 # Minimum IoU between the predicted track bounding box and a new detection
@@ -55,14 +55,3 @@ process_noise_vel: 1.00
 # Reflects the uncertainty in the ground-plane projection from a 2D bbox.
 measurement_noise: 0.50
 
-# ── TTC-based confidence gate ─────────────────────────────────────────────────
-# Tracks beyond this TTC (seconds) are only passed to downstream stages if
-# their confidence meets the threshold below.  Tracks at or below this TTC
-# are always passed regardless of confidence (safety-critical zone).
-# Set to 0 to disable the gate entirely.
-ttc_gate_s: 2.0
-
-# Minimum detection-confidence required for a track that is outside the
-# critical TTC zone (ttc_s > ttc_gate_s) to survive the output filter.
-# Range: [0, 1].  Typical: 0.45–0.55.
-ttc_conf_threshold: 0.50
