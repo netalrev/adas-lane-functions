@@ -33,10 +33,13 @@ from src.models.lanes import LaneManager, VehicleState
 from src.visualization.visualizer import CameraCalibration, PerceptionVisualizer
 from src.models.detection import TargetDetector
 from src.models.tracking import TrackManager
+from src.models.tracking import VehicleTrackManager, VehicleTrackState
+from src.features.lane_relations import LaneRelationMeasurer
 from src.features.rw_coordinates import project_bbox_to_ground
 
 
 # Imports
+from concurrent.futures import ThreadPoolExecutor
 from waymo_open_dataset import dataset_pb2 as open_dataset
 from omegaconf import DictConfig, OmegaConf
 import tensorflow as tf
@@ -132,15 +135,17 @@ def _resolve_segments(cfg: DictConfig) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def _process_segment(
-    tfrecord_path:      str,
-    seg_idx:            int,
-    cfg:                DictConfig,
-    experiment:         Experiment,
-    lane_manager:       LaneManager,
-    detector:           TargetDetector,
-    track_manager:      TrackManager,
-    enabled_paths:      set,
-    global_step_offset: int,
+    tfrecord_path:         str,
+    seg_idx:               int,
+    cfg:                   DictConfig,
+    experiment:            Experiment,
+    lane_manager:          LaneManager,
+    detector:              TargetDetector,
+    track_manager:         TrackManager,
+    vehicle_track_manager: VehicleTrackManager,
+    lane_measurer:         LaneRelationMeasurer,
+    enabled_paths:         set,
+    global_step_offset:    int,
 ) -> tuple[int, str]:
     """
     Process one .tfrecord segment end-to-end.
@@ -167,18 +172,16 @@ def _process_segment(
     print(f"{'='*70}")
     seg_t0 = _time.time()
 
-    # ── Real camera calibration from first frame ──────────────────────────────
+    # Camera calibration is extracted on step==0 inside the main loop, eliminating
+    # the separate .take(1) pre-scan that opened the TFRecord file twice.
     calib = CameraCalibration.default_front(image_width=1920, image_height=1280)
-    for _raw in tf.data.TFRecordDataset(tfrecord_path).take(1):
-        _frame = open_dataset.Frame()
-        _frame.ParseFromString(bytes(_raw.numpy()))
-        for _cam_cal in _frame.context.camera_calibrations:
-            if _cam_cal.name == open_dataset.CameraName.FRONT:
-                calib = CameraCalibration.from_waymo_camera(_cam_cal)
-                break
-    vis = PerceptionVisualizer(calib)
+    vis: PerceptionVisualizer | None = None
 
-    dataset = tf.data.TFRecordDataset(tfrecord_path, compression_type='')
+    # Prefetch overlaps disk reads with CPU/GPU compute at zero algorithmic cost.
+    dataset = (
+        tf.data.TFRecordDataset(tfrecord_path, compression_type='')
+        .prefetch(tf.data.AUTOTUNE)
+    )
 
     prev_pos, prev_time = None, None
     all_frames_gt: list = []
@@ -187,7 +190,13 @@ def _process_segment(
     # (EMA accumulators, previous-pose cache).
     lane_manager.reset_segment_state()
     track_manager.reset()
+    vehicle_track_manager.reset()
     prev_frame_ts: float | None = None
+
+    # Background thread pool for non-blocking Comet image uploads.
+    # The main frame loop submits tasks and continues immediately; shutdown(wait=True)
+    # at segment end ensures all uploads complete before the JSON asset is logged.
+    _upload_executor = ThreadPoolExecutor(max_workers=4)
 
     for step, data in enumerate(dataset):
         if step >= cfg.dataset.max_frames:
@@ -196,6 +205,18 @@ def _process_segment(
         print(f"  Frame {step}...")
         frame = open_dataset.Frame()
         frame.ParseFromString(bytes(data.numpy()))
+
+        # Extract real camera calibration once from the first frame's context,
+        # then build the visualizer — avoids a second TFRecord open for .take(1).
+        if step == 0:
+            for _cam_cal in frame.context.camera_calibrations:
+                if _cam_cal.name == open_dataset.CameraName.FRONT:
+                    calib = CameraCalibration.from_waymo_camera(_cam_cal)
+                    break
+            vis = PerceptionVisualizer(calib)
+            # Propagate real focal lengths to the vehicle EKF and lane measurer
+            vehicle_track_manager.set_camera_params(calib.K, calib.R_vc, calib.t_vc)
+            lane_measurer.update_calib(calib)
 
         # 1. Raw data
         img = extract_front_camera_image(frame)
@@ -217,9 +238,10 @@ def _process_segment(
                 project_bbox_to_ground(d.bbox_xyxy, calib.K, calib.R_vc, calib.t_vc)
                 for d in raw_dets
             ]
-            track_list = track_manager.update(raw_dets, rw_pos, dt=dt)
+            track_list         = track_manager.update(raw_dets, rw_pos, dt=dt)
+            vehicle_track_states = vehicle_track_manager.update(raw_dets, dt=dt)
         else:
-            raw_dets, track_list = [], []
+            raw_dets, track_list, vehicle_track_states = [], [], []
 
         gt_data["detections"] = [d.to_dict() for d in raw_dets]
         gt_data["tracks"]     = [t.to_dict() for t in track_list]
@@ -308,6 +330,14 @@ def _process_segment(
         # Path 4 — Host Lane (serialized by HostLaneStrategy)
         gt_data["host_lane"] = lane_results["host_lane"]
 
+        # 5. Vehicle EKF states + lane relations
+        # vehicle_ekf_tracks: per-track 9D state (x,y,z,vx,vy,heading,w,h,l)
+        # lane_relations: per-track distances to every active path type
+        gt_data["vehicle_ekf_tracks"] = [t.to_dict() for t in vehicle_track_states]
+        gt_data["lane_relations"]      = lane_measurer.compute(
+            vehicle_track_states, lane_results, gt_data
+        )
+
         all_frames_gt.append(gt_data)
 
         # ── Comet ML logging ────────────────────────────────────────────────
@@ -318,7 +348,8 @@ def _process_segment(
         if img is not None:
             raw_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
             comet_annotations = format_boxes_for_comet(gt_data.get("boxes_2d", []))
-            experiment.log_image(
+            _upload_executor.submit(
+                experiment.log_image,
                 raw_pil,
                 name=f"[{seg_name}] Raw_Front_Camera",
                 step=global_step,
@@ -333,7 +364,8 @@ def _process_segment(
                 enabled_paths=enabled_paths,
             )
             annotated_pil = Image.fromarray(cv2.cvtColor(annotated_img, cv2.COLOR_BGR2RGB))
-            experiment.log_image(
+            _upload_executor.submit(
+                experiment.log_image,
                 annotated_pil,
                 name=f"[{seg_name}] Annotated_Front_Camera",
                 step=global_step,
@@ -344,19 +376,68 @@ def _process_segment(
             # outputs can be compared side-by-side in the Comet image gallery.
             yolo_canvas = vis.draw_detections_and_tracks(img.copy(), gt_data)
             yolo_pil    = Image.fromarray(cv2.cvtColor(yolo_canvas, cv2.COLOR_BGR2RGB))
-            experiment.log_image(
+            _upload_executor.submit(
+                experiment.log_image,
                 yolo_pil,
                 name=f"[{seg_name}] YOLO_Detections",
                 step=global_step,
             )
 
-        experiment.log_metric("ego_speed_kmh", ego_speed, step=global_step)
+            # Fourth image: GT boxes + lanes + YOLO detections/tracks combined.
+            # This single image lets researchers compare ground-truth labels
+            # against the network's online output without switching tabs in Comet.
+            combined_canvas = vis.draw_detections_and_tracks(annotated_img.copy(), gt_data)
+            combined_pil    = Image.fromarray(cv2.cvtColor(combined_canvas, cv2.COLOR_BGR2RGB))
+            _upload_executor.submit(
+                experiment.log_image,
+                combined_pil,
+                name=f"[{seg_name}] Combined_GT_and_Predictions",
+                step=global_step,
+            )
+
+            # Fifth image: Vehicle EKF tracks with lane-relation color coding.
+            # Green bbox = inside ego lane, orange = adjacent, red = far outside.
+            # Each track carries a velocity arrow + 9D state panel (speed, TTC,
+            # 3D size, forward/lateral position, lane side).
+            ekf_canvas = vis.draw_vehicle_ekf_tracks(
+                annotated_img.copy(),
+                gt_data.get("vehicle_ekf_tracks", []),
+                gt_data.get("lane_relations",     []),
+            )
+            ekf_pil = Image.fromarray(cv2.cvtColor(ekf_canvas, cv2.COLOR_BGR2RGB))
+            _upload_executor.submit(
+                experiment.log_image,
+                ekf_pil,
+                name=f"[{seg_name}] Vehicle_EKF_Tracks",
+                step=global_step,
+            )
+
+        # ── Per-frame scalar metrics ────────────────────────────────────────
+        experiment.log_metric("ego_speed_kmh",    ego_speed,                    step=global_step)
+        experiment.log_metric("ekf_vehicle_count", len(vehicle_track_states),   step=global_step)
+
+        # Log the CIPV (Closest In-Path Vehicle) state each frame so Comet
+        # charts show range, speed, and TTC as time-series for every run.
+        if vehicle_track_states:
+            cipv = min(vehicle_track_states, key=lambda t: t.x_veh)
+            experiment.log_metric("cipv_range_m",   cipv.x_veh,    step=global_step)
+            experiment.log_metric("cipv_lateral_m", cipv.y_veh,    step=global_step)
+            experiment.log_metric("cipv_speed_mps", cipv.speed_mps, step=global_step)
+            if cipv.ttc_s != float('inf'):
+                experiment.log_metric("cipv_ttc_s", cipv.ttc_s, step=global_step)
+            experiment.log_metric("cipv_width_m",  cipv.width_m,  step=global_step)
+            experiment.log_metric("cipv_height_m", cipv.height_m, step=global_step)
 
     frames_done = len(all_frames_gt)
 
+    # Drain the upload queue before logging the JSON asset, so all images for
+    # this segment are committed in Comet before the run is marked complete.
+    _upload_executor.shutdown(wait=True)
+
     # ── Save JSON ─────────────────────────────────────────────────────────────
+    # Compact output (no indent) reduces file size by 3-5× vs indent=4 on float arrays.
     with open(json_out, "w") as f:
-        json.dump(all_frames_gt, f, indent=4)
+        json.dump(all_frames_gt, f)
     print(f"  JSON saved → {json_out}  ({frames_done} frames)")
     experiment.log_asset(json_out, file_name=seg_name + ".json")
 
@@ -398,9 +479,13 @@ def main(cfg: DictConfig):
         print(f"  [{i:03d}] {os.path.basename(p)}")
 
     # ── Build all inference engines once (expensive ONNX loads) ─────────────────
-    lane_manager  = LaneManager(cfg)
-    detector      = TargetDetector(cfg.perception.detector)
-    track_manager = TrackManager(cfg.perception.tracker)
+    lane_manager          = LaneManager(cfg)
+    detector              = TargetDetector(cfg.perception.detector)
+    track_manager         = TrackManager(cfg.perception.tracker)
+    vehicle_track_manager = VehicleTrackManager(cfg.perception.vehicle_ekf)
+    lane_measurer         = LaneRelationMeasurer(
+        CameraCalibration.default_front(image_width=1920, image_height=1280)
+    )
 
     _viz_cfg = getattr(cfg, "visualization", None)
     _ep_list = list(getattr(_viz_cfg, "enabled_paths",
@@ -415,15 +500,17 @@ def main(cfg: DictConfig):
 
     for seg_idx, tfrecord_path in enumerate(segments):
         frames_done, _ = _process_segment(
-            tfrecord_path      = tfrecord_path,
-            seg_idx            = seg_idx,
-            cfg                = cfg,
-            experiment         = experiment,
-            lane_manager       = lane_manager,
-            detector           = detector,
-            track_manager      = track_manager,
-            enabled_paths      = enabled_paths,
-            global_step_offset = global_step,
+            tfrecord_path         = tfrecord_path,
+            seg_idx               = seg_idx,
+            cfg                   = cfg,
+            experiment            = experiment,
+            lane_manager          = lane_manager,
+            detector              = detector,
+            track_manager         = track_manager,
+            vehicle_track_manager = vehicle_track_manager,
+            lane_measurer         = lane_measurer,
+            enabled_paths         = enabled_paths,
+            global_step_offset    = global_step,
         )
         global_step  += cfg.dataset.max_frames   # reserve step space per segment
         total_frames += frames_done
