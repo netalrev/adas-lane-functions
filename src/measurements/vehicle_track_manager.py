@@ -47,7 +47,7 @@ from dataclasses import dataclass
 import numpy as np
 from omegaconf import DictConfig
 
-from src.models.detection.detector import Detection, CLASS_VEHICLE
+from src.detectors.vehicle.detector import Detection, CLASS_VEHICLE
 from .vehicle_ekf import (
     VehicleEKF,
     IDX_X, IDX_Y, IDX_Z, IDX_VX, IDX_VY, IDX_HDG, IDX_W, IDX_H, IDX_L,

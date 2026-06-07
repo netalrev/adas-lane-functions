@@ -50,7 +50,7 @@ import numpy as np
 from omegaconf import DictConfig
 
 from src.visualization.visualizer import CameraCalibration
-from src.models.tracking.vehicle_track_manager import VehicleTrackState
+from .vehicle_track_manager import VehicleTrackState
 
 log = logging.getLogger(__name__)
 

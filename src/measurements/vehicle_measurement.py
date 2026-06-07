@@ -53,10 +53,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-# NOTE: project_bbox_to_ground is intentionally NOT imported from
-# src.features.rw_coordinates here to avoid a circular import chain that goes
-# through src/features/__init__.py → lane_relations → vehicle_track_manager.
-# The ground-projection math is self-contained and lives below.
+# NOTE: project_bbox_to_ground is NOT imported from rw_coordinates here;
+# the ground-projection math is duplicated below for self-containment.
 
 # ---------------------------------------------------------------------------
 # Ground-plane projection (self-contained to avoid circular imports)

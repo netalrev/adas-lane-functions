@@ -29,13 +29,12 @@ from src.data.waymo_parser import (
     parse_map_features_global, project_hdmap_lanes,
 )
 from src.utils.comet_logger import format_boxes_for_comet
-from src.models.lanes import LaneManager, VehicleState
+from src.detectors.lane import LaneManager, VehicleState
 from src.visualization.visualizer import CameraCalibration, PerceptionVisualizer
-from src.models.detection import TargetDetector
-from src.models.tracking import TrackManager
-from src.models.tracking import VehicleTrackManager, VehicleTrackState
-from src.features.lane_relations import LaneRelationMeasurer
-from src.features.rw_coordinates import project_bbox_to_ground
+from src.detectors.vehicle import TargetDetector, TrackManager
+from src.measurements import VehicleTrackManager, VehicleTrackState
+from src.measurements import LaneRelationMeasurer
+from src.measurements import project_bbox_to_ground
 
 
 # Imports

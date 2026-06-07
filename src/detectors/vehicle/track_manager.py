@@ -49,7 +49,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from omegaconf import DictConfig
 
-from src.models.detection.detector import Detection
+from .detector import Detection
 from .kalman_tracker import KalmanTracker
 
 log = logging.getLogger(__name__)
