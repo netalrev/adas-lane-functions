@@ -175,15 +175,11 @@ class YOLOPv2DrivableDetector:
         # Temporal lane-line persistence — hold last valid up to N frames
         self._cached_lane_result: Optional[LaneDetectionResult] = None
         self._lane_cache_age: int = 0
-        self._LANE_MAX_PERSIST: int = 7
+        self._LANE_MAX_PERSIST: int = 25
 
-        # EMA coefficient caches for temporal polynomial smoothing.
-        # Maintained separately for the drivable-area centre polynomial,
-        # the boundary centre polynomial, and left/right lane-line polynomials.
-        # Each is updated only on a successful poly fit; transient failures
-        # leave the cache intact so the next good frame blends from a valid prior.
-        self._prev_center_coeffs: Optional[np.ndarray] = None
-        self._prev_boundary_coeffs: Optional[np.ndarray] = None
+        # EMA coefficient cache — lane-line polynomials only.
+        # Drivable-area centre and boundary paths now use the smoothed-polyline
+        # approach (no polynomial fitting, no temporal blending in pixel space).
         self._prev_ll_coeffs: dict[str, Optional[np.ndarray]] = {
             "left":  None,
             "right": None,
@@ -221,11 +217,9 @@ class YOLOPv2DrivableDetector:
         polynomial coefficients and lane-persistence state do not bleed into
         the first frames of the new recording.
         """
-        self._cached_lane_result     = None
-        self._lane_cache_age         = 0
-        self._prev_center_coeffs     = None
-        self._prev_boundary_coeffs   = None
-        self._prev_ll_coeffs         = {"left": None, "right": None}
+        self._cached_lane_result = None
+        self._lane_cache_age     = 0
+        self._prev_ll_coeffs     = {"left": None, "right": None}
 
     def detect_full(
         self,
@@ -510,11 +504,11 @@ class YOLOPv2DrivableDetector:
         horiz_cover = cv2.dilate(horiz_blobs, k_dilate)
         clean = cv2.bitwise_and(mask, cv2.bitwise_not(horiz_cover))
         # Keep only near-vertical structures (lane marking segments).
-        # A (3, 25) kernel was deleting distant dashed markings: perspective
-        # compression makes far-field segments shorter than 25 px.  The
-        # smaller (3, 7) kernel retains fragments as short as 7 px while
-        # still eliminating truly horizontal artefacts.
-        k_vert  = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 7))
+        # A (3, 7) kernel required 7 vertically-consecutive pixels, which
+        # erased diagonal lane lines on sharp curves (the marking becomes
+        # near-45° so no 7-pixel vertical run exists).  A minimal (3, 3)
+        # kernel removes salt-and-pepper noise without destroying diagonals.
+        k_vert  = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
         clean   = cv2.morphologyEx(clean, cv2.MORPH_OPEN, k_vert)
 
         # ── Histogram-anchored continuity tracking ───────────────────────────
@@ -533,7 +527,10 @@ class YOLOPv2DrivableDetector:
         # jump to a bike-lane or tram-track marking further away.
         cx      = src_w // 2
         y_start = src_h - 1
-        y_end   = int(src_h * 0.45)
+        # Raised from 0.45 to 0.35: on uphill roads the vanishing point
+        # migrates toward the upper image half, causing the 0.45 cutoff to
+        # truncate valid far-field lane markings that appear above mid-frame.
+        y_end   = int(src_h * 0.35)
         n_steps = 70
         step    = max(1, (y_start - y_end) // n_steps)
 
@@ -542,25 +539,41 @@ class YOLOPv2DrivableDetector:
         TRACK_HALF = self._track_half   # per-row tracking window half-width (px); wider for sharp curves
 
         # ── Histogram initialisation ─────────────────────────────────────────
-        # Sum the bottom 30 % of the active scan region column-by-column.
-        hist_y0   = y_start - int((y_start - y_end) * 0.30)
-        histogram = clean[hist_y0:y_start + 1, :].sum(axis=0).astype(np.float64)
-
-        # Smooth with a mild moving-average (window = 11 px) to merge fragmented
-        # peaks from dashed-line gaps and suppress salt-and-pepper spikes.
-        smooth_w  = 11
-        kernel    = np.ones(smooth_w, dtype=np.float64) / smooth_w
-        histogram = np.convolve(histogram, kernel, mode="same")
-
-        # Search each image half independently so that a dominant noise
-        # feature on one side cannot steal the anchor for the other side.
-        # Left anchor: strongest peak in [0, cx); right anchor: strongest
-        # peak in [cx, src_w).  This mirrors IPM's corridor-restricted
-        # histogram and is more robust at multi-lane intersections.
-        left_hist  = histogram[:cx]
-        right_hist = histogram[cx:]
-        peak1: Optional[int] = int(np.argmax(left_hist))  if left_hist.max()  > 0 else None
-        peak2: Optional[int] = (int(np.argmax(right_hist)) + cx) if right_hist.max() > 0 else None
+        # Try increasingly tall histogram zones (bottom 30 %, 60 %, 90 % of
+        # the active scan region) until at least one side yields a peak.
+        # On hilly roads near-field markings migrate toward the upper portion
+        # of the image; a fixed 30 % slice misses them entirely.
+        smooth_w = 11
+        _kernel  = np.ones(smooth_w, dtype=np.float64) / smooth_w
+        peak1:    Optional[int] = None
+        peak2:    Optional[int] = None
+        for _hist_frac in (0.30, 0.60, 0.90):
+            _hist_y0 = y_start - int((y_start - y_end) * _hist_frac)
+            _hist    = clean[_hist_y0:y_start + 1, :].sum(axis=0).astype(np.float64)
+            _hist    = np.convolve(_hist, _kernel, mode="same")
+            _l_hist  = _hist[:cx]
+            _r_hist  = _hist[cx:]
+            # Nearest-to-center strategy: take the RIGHTMOST significant peak
+            # on the left side and the LEFTMOST on the right.  On multi-lane
+            # roads the far-side markings (oncoming / bike-lane) accumulate more
+            # pixels and would win a raw argmax, anchoring the tracker to the
+            # wrong line.  "Significant" = >= 15 % of that side's max after
+            # smoothing (absolute floor of 2.0 suppresses thermal noise).
+            if _l_hist.max() > 0:
+                _l_floor = max(2.0, _l_hist.max() * 0.15)
+                _l_ids   = np.where(_l_hist >= _l_floor)[0]
+                _p1      = int(_l_ids[-1]) if len(_l_ids) > 0 else None  # rightmost
+            else:
+                _p1 = None
+            if _r_hist.max() > 0:
+                _r_floor = max(2.0, _r_hist.max() * 0.15)
+                _r_ids   = np.where(_r_hist >= _r_floor)[0]
+                _p2      = (int(_r_ids[0]) + cx) if len(_r_ids) > 0 else None  # leftmost
+            else:
+                _p2 = None
+            if _p1 is not None or _p2 is not None:
+                peak1, peak2 = _p1, _p2
+                break
 
         prev_left_x:  Optional[int] = peak1
         prev_right_x: Optional[int] = peak2
@@ -568,113 +581,116 @@ class YOLOPv2DrivableDetector:
         left_raw:  list[list[int]] = []
         right_raw: list[list[int]] = []
 
+        # Dynamic search windows: start tight, expand during dashed-line gaps
+        # so the tracker can re-acquire the next dash even after the road has
+        # curved laterally.  Reset to TRACK_HALF on every successful hit.
+        _max_window = int(src_w * 0.20)
+        left_window  = TRACK_HALF
+        right_window = TRACK_HALF
+
         for y in range(y_start, y_end, -step):
-            row = np.where(clean[y, :] > 0)[0]
+            # Band sampling: project the entire step-height slab into a single
+            # 1-D column presence array.  A single-pixel row check misses thin
+            # diagonal lane lines that fall in the gap between consecutive y
+            # samples; taking the column-wise max over the full band guarantees
+            # that ANY white pixel in the interval [y-step, y) is captured.
+            y_lo = max(0, y - step)
+            band = clean[y_lo:y, :]
+            row  = np.where(band.max(axis=0) > 0)[0]
             if row.size == 0:
                 continue
 
             # ---- Left side ----
             if prev_left_x is not None:
                 lc = row[
-                    (row >= max(0, prev_left_x - TRACK_HALF)) &
-                    (row <= min(src_w - 1, prev_left_x + TRACK_HALF))
+                    (row >= max(0, prev_left_x - left_window)) &
+                    (row <= min(src_w - 1, prev_left_x + left_window))
                 ]
                 if lc.size > 0:
                     best_l      = int(round(lc.mean()))  # centroid of window pixels
                     left_raw.append([best_l, y])
                     prev_left_x = best_l
-                # else: dashed-line gap — hold anchor, do not update
+                    left_window = TRACK_HALF             # re-anchor: shrink back
+                else:
+                    # Dashed-line gap: road may have curved during the gap, so
+                    # widen the net for the next row to re-acquire the dash.
+                    left_window = min(left_window + 15, _max_window)
 
             # ---- Right side ----
             if prev_right_x is not None:
                 rc = row[
-                    (row >= max(0, prev_right_x - TRACK_HALF)) &
-                    (row <= min(src_w - 1, prev_right_x + TRACK_HALF))
+                    (row >= max(0, prev_right_x - right_window)) &
+                    (row <= min(src_w - 1, prev_right_x + right_window))
                 ]
                 if rc.size > 0:
                     best_r       = int(round(rc.mean()))  # centroid of window pixels
                     right_raw.append([best_r, y])
                     prev_right_x = best_r
-                # else: dashed-line gap — hold anchor, do not update
+                    right_window = TRACK_HALF            # re-anchor: shrink back
+                else:
+                    # Dashed-line gap: expand window to chase lateral road shift.
+                    right_window = min(right_window + 15, _max_window)
 
-        lconf = len(left_raw)  / n_steps
-        rconf = len(right_raw) / n_steps
+        # Fair confidence normalization for short-support lanes.
+        # On sharp curves a lane physically exits the image frame before
+        # accumulating n_steps points, so dividing by n_steps unfairly
+        # penalizes valid detections.  Normalizing to 40 % of n_steps means
+        # a lane that spans 40 % of the available vertical range scores 1.0.
+        lconf = min(1.0, len(left_raw)  / (n_steps * 0.40))
+        rconf = min(1.0, len(right_raw) / (n_steps * 0.40))
 
         def _fit_poly(pts: list[list[int]], side: str) -> Optional[np.ndarray]:
-            # Require at least 4 points so sparse dashed lines still fit.
-            if len(pts) < 4:
+            # ARCHITECTURAL NOTE — Smoothed Polyline, no polynomial extrapolation.
+            # np.polyfit / np.polyval / EMA blending were removed because:
+            #   (a) A global polynomial cannot model S-curves or sharp exits;
+            #       it extrapolates blindly to y_end when far-field points are
+            #       missing (dashed gaps, occlusion), producing impossible shapes.
+            #   (b) Image-space coefficient EMA caused "ghosting": pixel coords
+            #       shift violently during ego-rotation so 75 % history weight
+            #       dragged the line behind the real mask.
+            # This function builds a polyline strictly from the tracker's own
+            # observed points, smooths only the x-jitter with a boxcar filter,
+            # and draws ONLY over the vertical range where pixels were detected.
+
+            # The convolution window must be defined first: the minimum-points
+            # guard requires at least _win inputs so that mode='valid' with
+            # kernel length _win produces a non-empty output (length N - _win + 1)
+            # that aligns exactly with ys_raw[_trim:-_trim] (length N - 2*_trim).
+            # With N < _win, np.convolve(mode='valid') returns a shorter-than-
+            # expected array whose size does NOT match the ys trim, causing
+            # np.column_stack to raise a shape mismatch ValueError.
+            _win  = 5
+            _trim = _win // 2   # = 2 samples removed from each end
+
+            if len(pts) < _win:
                 return None
+
+            # Sort by y descending: bottom of image first (large y → small y).
             arr = np.array(pts, dtype=np.float64)
+            arr = arr[np.argsort(-arr[:, 1])]
 
-            # Dynamic degree selection.
-            # (Outlier rejection removed: the spatial tracker's TRACK_HALF=80 window
-            # already prevents noise points from entering the sample set.  Statistical
-            # rejection on x would incorrectly discard the naturally wide-ranging
-            # far-field points on a genuine curve.)
-            # A degree-2 polynomial has 3 free parameters; fitting it on a short
-            # vertical segment (few pixels tall) leaves the curvature coefficient
-            # unconstrained — the solver produces wild parabolas on straight roads.
-            # Force degree 1 (a straight line) when the vertical span of the
-            # collected points is less than 35 % of the image height.
-            v_span = float(arr[:, 1].max() - arr[:, 1].min())
-            deg    = 2 if v_span >= 0.35 * src_h else 1
-            try:
-                raw_coeffs = np.polyfit(arr[:, 1], arr[:, 0], deg)
-            except (np.linalg.LinAlgError, ValueError):
-                return None
-
-            # Normalise to a 3-element degree-2 array so the EMA cache format
-            # is consistent across frames regardless of the fitted degree.
-            if deg == 1:
-                coeffs = np.array([0.0, raw_coeffs[0], raw_coeffs[1]])
-            else:
-                coeffs = raw_coeffs
-
-            # EMA smoothing: blend fresh coefficients with the previous frame's
-            # smoothed values.  The cache update is deferred to AFTER all
-            # validation checks so a failing frame never corrupts the running
-            # average — the next valid frame will still blend from the last
-            # good polynomial.
-            prev_ll = self._prev_ll_coeffs.get(side)
-            if prev_ll is not None:
-                blended = (
-                    self._coeff_ema_alpha * coeffs
-                    + (1.0 - self._coeff_ema_alpha) * prev_ll
-                )
-            else:
-                blended = coeffs
-
-            # Bound drawing strictly to observed data.  The ego-hood occludes
-            # lane lines, so collected pts often stop hundreds of pixels above
-            # y_start.  Evaluating a degree-2 polynomial far outside its support
-            # domain (below max_obs_y) produces wild extrapolation tails.
-            max_obs_y = float(max(p[1] for p in pts))
-            ys = np.linspace(max_obs_y, y_end, n_steps, dtype=np.float64)
-            xs = np.polyval(blended, ys).clip(0.0, float(src_w - 1))
+            ys_raw = arr[:, 1]
+            xs_raw = arr[:, 0]
 
             # Side plausibility: mean x must be on the correct image half.
-            if side == "left"  and xs.mean() >= src_w * 0.70:
+            if side == "left"  and xs_raw.mean() >= src_w * 0.70:
                 return None
-            if side == "right" and xs.mean() <= src_w * 0.30:
-                return None
-
-            # Horizon corridor check: the far-field x must lie within a wide
-            # symmetric band around the image centre.  The previous strict
-            # "top_x >= cx" (left) / "top_x <= cx" (right) constraints
-            # rejected valid curved-road fits because on any curve the
-            # vanishing point shifts left or right, moving both lanes'
-            # horizon intersections across the image centreline.  We now
-            # only reject fits that are wildly outside the corridor, and
-            # we do NOT flush the EMA on failure so the next good frame
-            # can still blend from the last valid polynomial.
-            top_x        = float(xs[-1])
-            max_half_top = int(src_w * FAR_FRAC * 2.5)   # ±0.30 × src_w
-            if abs(top_x - cx) > max_half_top:
+            if side == "right" and xs_raw.mean() <= src_w * 0.30:
                 return None
 
-            # All checks passed — commit the blended coefficients to EMA cache.
-            self._prev_ll_coeffs[side] = blended.copy()
-            return np.column_stack([xs.astype(np.int32), ys.astype(np.int32)])
+            # 1-D moving-average (window = 5, mode='valid') to suppress
+            # single-pixel jitter without distorting the curve shape.
+            # mode='valid' shrinks the output by (_win - 1) = 4 samples, so
+            # trim the corresponding _trim boundary rows from ys to keep arrays
+            # aligned.  The boundary rows are the least reliable tracker
+            # samples (first acquisition and last far-field point), so
+            # discarding them also improves geometric quality.
+            xs_smooth = np.convolve(xs_raw, np.ones(_win) / _win, mode="valid")
+            ys_out    = ys_raw[_trim : len(ys_raw) - _trim]
+
+            xs_out = xs_smooth.clip(0.0, float(src_w - 1))
+
+            return np.column_stack([xs_out.astype(np.int32), ys_out.astype(np.int32)])
 
         left_img  = _fit_poly(left_raw,  "left")
         right_img = _fit_poly(right_raw, "right")
@@ -711,19 +727,37 @@ class YOLOPv2DrivableDetector:
                 # fit that is always an artefact of noise or scattered activations.
                 l_top = int(left_img[-1, 0])   # xs[−1] = horizon end (min y)
                 r_top = int(right_img[-1, 0])
-                if r_top - l_top > r_bot - l_bot:
+                # On tight curves, inner-arc geometry can make the fitted
+                # polynomial appear slightly wider at the horizon than at
+                # the bottom — this is physically valid, not an artefact.
+                # Only discard truly extreme divergence (>1.8× bottom width).
+                if r_top - l_top > (r_bot - l_bot) * 1.8:
                     log.debug(
-                        "YOLOPv2 ll: lanes diverge toward horizon "
-                        "(top_w=%d  bot_w=%d) — discarding",
+                        "YOLOPv2 ll: lanes diverge excessively toward horizon "
+                        "(top_w=%d  bot_w=%.0f) — discarding",
                         r_top - l_top, r_bot - l_bot,
                     )
                     left_img = right_img = None
 
         center: Optional[np.ndarray] = None
         if left_img is not None and right_img is not None:
-            center = (
-                (left_img.astype(np.float64) + right_img.astype(np.float64)) / 2.0
-            ).astype(np.int32)
+            # The smoothed-polyline approach returns exactly as many rows as
+            # were observed per side, so left_img and right_img can have
+            # different lengths.  Interpolate both onto a shared y-grid that
+            # spans only their overlapping vertical range so the center is
+            # always backed by real observations on both sides.
+            l_ys = left_img[:,  1].astype(np.float64)   # already sorted desc
+            r_ys = right_img[:, 1].astype(np.float64)
+            y_lo = max(l_ys.min(), r_ys.min())           # highest row (smallest y)
+            y_hi = min(l_ys.max(), r_ys.max())           # lowest  row (largest  y)
+            if y_hi > y_lo:
+                # np.interp expects xp ascending; our ys are descending, so flip.
+                n_c  = min(len(left_img), len(right_img))
+                c_ys = np.linspace(y_hi, y_lo, n_c)
+                l_xs = np.interp(c_ys, l_ys[::-1], left_img[:,  0][::-1].astype(np.float64))
+                r_xs = np.interp(c_ys, r_ys[::-1], right_img[:, 0][::-1].astype(np.float64))
+                c_xs = (l_xs + r_xs) / 2.0
+                center = np.column_stack([c_xs.astype(np.int32), c_ys.astype(np.int32)])
 
         return LaneDetectionResult(
             left_lane        = left_img,
@@ -766,16 +800,16 @@ class YOLOPv2DrivableDetector:
         w:    int,
     ) -> tuple:
         """
-        Return left and right ego-lane boundary paths by offsetting the fitted
-        centre polynomial by a perspective-tapered half-width.
+        Return left and right ego-lane boundary paths by offsetting a smoothed
+        centre polyline by a perspective-tapered half-width.
 
-        Using offsets rather than mask-edge detection avoids the intersection
-        artefact where the drivable mask fills the whole road and edge detection
-        returns curb-to-curb widths much larger than the ego lane.
+        np.polyfit / EMA blending were removed: on sharp curves the polynomial
+        extrapolates blindly and 2D-pixel EMA causes ghosting lag.  The centre
+        is now derived directly from the per-row mask centroids, smoothed with
+        a 1-D boxcar filter, and drawn only over the observed vertical range.
 
-        Half-width in pixels is linearly interpolated between:
-          near-field (y = h-1)  : w * 0.09  ~173 px  (~1 lane half-width close)
-          far-field  (y = 0.45h): w * 0.03  ~ 58 px  (converges at horizon)
+        Half-width tapers linearly from w*0.09 (near-field) to w*0.03
+        (far-field) using the ACTUAL observed y positions.
 
         Returns
         -------
@@ -788,7 +822,7 @@ class YOLOPv2DrivableDetector:
         x_hi    = int(w * 0.85)
         step    = max(1, (y_start - y_end) // n_steps)
 
-        # Fit centre polynomial (same band as _mask_to_centerline)
+        # Collect per-row drivable centroids (same band as _mask_to_centerline).
         raw_ctr: list[list[int]] = []
         for y in range(y_start, y_end, -step):
             row_xs = np.where(mask[y, x_lo:x_hi] > 0)[0]
@@ -798,31 +832,29 @@ class YOLOPv2DrivableDetector:
         if len(raw_ctr) < 4:
             return None, None
 
+        # Sort bottom-to-top (descending y), then apply a 1-D moving average
+        # (window=5, mode='valid') to suppress centroid jitter.  mode='valid'
+        # shortens the output by 4 samples; trim ys to match.
         arr    = np.array(raw_ctr, dtype=np.float64)
-        coeffs = np.polyfit(arr[:, 1], arr[:, 0], 2)
+        arr    = arr[np.argsort(-arr[:, 1])]
+        xs_raw = arr[:, 0]
+        ys_raw = arr[:, 1]
 
-        # EMA smoothing: blend the newly fitted coefficients with the
-        # previous frame's boundary centre polynomial.  Both the left and
-        # right boundary offsets derive from this single polynomial, so
-        # smoothing here stabilises the entire drivable corridor at once.
-        if self._prev_boundary_coeffs is not None:
-            coeffs = (
-                self._coeff_ema_alpha * coeffs
-                + (1.0 - self._coeff_ema_alpha) * self._prev_boundary_coeffs
-            )
-        self._prev_boundary_coeffs = coeffs.copy()
+        _win   = 5
+        _trim  = _win // 2
+        xs_ctr = np.convolve(xs_raw, np.ones(_win) / _win, mode="valid")
+        ys_ctr = ys_raw[_trim : len(ys_raw) - _trim]
 
-        ys     = np.linspace(y_start, y_end, n_steps, dtype=np.int32)
-        xs_ctr = np.polyval(coeffs, ys)
+        # Perspective-tapered half-width computed on the ACTUAL observed ys.
+        # frac = 1 at the bottom row (near-field), 0 at the horizon.
+        frac    = (ys_ctr - y_end) / max(1, y_start - y_end)
+        half_px = w * 0.03 + (w * 0.09 - w * 0.03) * frac
 
-        # Perspective-tapered half-width (1 = near-field, 0 = far-field)
-        frac      = (ys - y_end) / max(1, y_start - y_end)   # 0..1
-        half_px   = w * 0.03 + (w * 0.09 - w * 0.03) * frac  # (n_steps,)
-
+        ys_out   = ys_ctr.astype(np.int32)
         xs_left  = (xs_ctr - half_px).clip(0, w - 1).astype(np.int32)
         xs_right = (xs_ctr + half_px).clip(0, w - 1).astype(np.int32)
 
-        return np.column_stack([xs_left, ys]), np.column_stack([xs_right, ys])
+        return np.column_stack([xs_left, ys_out]), np.column_stack([xs_right, ys_out])
 
     def _mask_to_centerline(
         self,
@@ -864,30 +896,27 @@ class YOLOPv2DrivableDetector:
                 raw_pts.append([int(row_xs.mean()) + x_lo, y])
 
         if len(raw_pts) < 4:
-            # Fallback: straight ahead centre column, confidence=0
+            # Fallback: straight-ahead centre column, confidence = 0.
             ys = np.linspace(h - 1, h // 2, 20, dtype=np.int32)
             return np.column_stack([np.full_like(ys, w // 2), ys])
 
-        # --- Stage 2: polynomial smoothing x = a*y^2 + b*y + c ---
+        # --- Stage 2: smoothed polyline — no polynomial, no EMA ---
+        # np.polyfit / EMA blending removed: polynomial extrapolation diverges
+        # on sharp curves and 2D-pixel EMA causes ghosting lag during
+        # ego-rotation.  A 1-D boxcar filter suppresses centroid jitter while
+        # faithfully following the mask geometry frame-by-frame.
         raw_arr = np.array(raw_pts, dtype=np.float64)
-        ys_raw  = raw_arr[:, 1]
+        raw_arr = raw_arr[np.argsort(-raw_arr[:, 1])]  # sort bottom-to-top
         xs_raw  = raw_arr[:, 0]
-        coeffs  = np.polyfit(ys_raw, xs_raw, 2)
+        ys_raw  = raw_arr[:, 1]
 
-        # EMA smoothing: blend the newly fitted coefficients with the
-        # smoothed coefficients from the previous frame.  Per-frame mask
-        # noise (segmentation boundary flicker) is suppressed while the
-        # polynomial still tracks genuine road curvature changes.
-        if self._prev_center_coeffs is not None:
-            coeffs = (
-                self._coeff_ema_alpha * coeffs
-                + (1.0 - self._coeff_ema_alpha) * self._prev_center_coeffs
-            )
-        self._prev_center_coeffs = coeffs.copy()
+        # mode='valid' shortens output by (win-1)=4; trim ys to match.
+        _win      = 5
+        _trim     = _win // 2
+        xs_smooth = np.convolve(xs_raw, np.ones(_win) / _win, mode="valid").clip(0, w - 1)
+        ys_smooth = ys_raw[_trim : len(ys_raw) - _trim]
 
-        ys_smooth = np.linspace(y_start, y_end, n_steps, dtype=np.int32)
-        xs_smooth = np.polyval(coeffs, ys_smooth).clip(0, w - 1).astype(np.int32)
-        return np.column_stack([xs_smooth, ys_smooth])
+        return np.column_stack([xs_smooth.astype(np.int32), ys_smooth.astype(np.int32)])
 
     def _apply_forward_frustum(self, mask: np.ndarray) -> np.ndarray:
         """

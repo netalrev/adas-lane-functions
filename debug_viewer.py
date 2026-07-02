@@ -17,11 +17,14 @@ Panels
   Info (tab)     Frame metadata · box display mode · lane path toggles
                  · path data quality table.
 
-  Tracks (tab)   EKF vehicle track table (9D state) + per-track SF measurement
-                 breakdown: y0-proj, height-prior, width-prior, Kalman input.
+  Tracks (tab)   EKF vehicle track table (14-field state) + per-track SF
+                 measurement breakdown + Lane Relations for selected track.
 
-  Plot (tab)     Embedded time-series chart — any EKF/SF field for any
-                 track_id over all frames, with a live frame-cursor line.
+  Detections (tab)  Raw YOLO detections · Kalman TrackManager tracks (all
+                    classes) · GT 3D bounding boxes from laser labels.
+
+  Plot (tab)     Embedded time-series chart — any EKF/SF/lane-relation field
+                 for any track_id over all frames, with a live frame-cursor.
 
   JSON (tab)     Raw frame JSON (populated lazily — zero cost during playback).
 
@@ -32,6 +35,7 @@ Keyboard shortcuts
   Home / End jump to first / last frame
   + / -      increase / decrease playback speed
   T          jump to Tracks tab
+  D          jump to Detections tab
   P          jump to Plot tab
   J          jump to JSON tab
 """
@@ -127,8 +131,18 @@ _PLOT_FIELDS: dict[str, str] = {
     "sf_width_x":  "SF width-prior x (m)",
     "sf_h_aspect": "SF h_aspect (px/fy)",
     "sf_w_aspect": "SF w_aspect (px/fx)",
-    "km_x_gnd":    "Kalman x_gnd (m)",
-    "km_y_gnd":    "Kalman y_gnd (m)",
+    "km_x_gnd":          "Kalman x_gnd (m)",
+    "km_y_gnd":          "Kalman y_gnd (m)",
+    # Lane relation — lateral offset per path (m, + = left of path)
+    "lr_kinematic_lateral":  "LR kinematic lateral (m)",
+    "lr_drivable_lateral":   "LR drivable lateral (m)",
+    "lr_host_lateral":       "LR host-lane lateral (m)",
+    "lr_hdmap_lateral":      "LR hdmap lateral (m)",
+    # Lane relation — inside-bounds flag (1 = inside, 0 = outside)
+    "lr_kinematic_inside":   "LR kinematic inside (0/1)",
+    "lr_drivable_inside":    "LR drivable inside (0/1)",
+    "lr_host_inside":        "LR host-lane inside (0/1)",
+    "lr_hdmap_inside":       "LR hdmap inside (0/1)",
 }
 
 
@@ -198,6 +212,13 @@ def build_track_history(gt_data: list) -> dict[int, dict[str, list]]:
     history: dict[int, dict[str, list]] = {}
 
     for frame_idx, gt in enumerate(gt_data):
+        # Build lane-relation lookup for this frame: {track_id -> relations dict}
+        _lr_idx = {
+            e["track_id"]: e.get("relations", {})
+            for e in gt.get("lane_relations", [])
+            if "track_id" in e
+        }
+
         for t in gt.get("vehicle_ekf_tracks", []):
             tid = t.get("track_id")
             if tid is None:
@@ -233,6 +254,27 @@ def build_track_history(gt_data: list) -> dict[int, dict[str, list]]:
             km = t.get("kalman_input") or {}
             _push("km_x_gnd", km.get("x_gnd"))
             _push("km_y_gnd", km.get("y_gnd"))
+
+            # Lane relations — lateral offset and inside-bounds per path
+            lr_rels = _lr_idx.get(tid, {})
+            for _pt, _fk in (
+                ("kinematic",     "lr_kinematic_lateral"),
+                ("drivable_path", "lr_drivable_lateral"),
+                ("host_lane",     "lr_host_lateral"),
+                ("hdmap",         "lr_hdmap_lateral"),
+            ):
+                _rel = lr_rels.get(_pt, {})
+                if _rel.get("valid"):
+                    _push(_fk, _rel.get("dist_lateral_m"))
+            for _pt, _fk in (
+                ("kinematic",     "lr_kinematic_inside"),
+                ("drivable_path", "lr_drivable_inside"),
+                ("host_lane",     "lr_host_inside"),
+                ("hdmap",         "lr_hdmap_inside"),
+            ):
+                _rel = lr_rels.get(_pt, {})
+                if _rel.get("valid"):
+                    _push(_fk, 1.0 if _rel.get("inside_bounds") else 0.0)
 
     return history
 
@@ -498,7 +540,7 @@ class ImageView(QLabel):
 class DebugWindow(QMainWindow):
 
     _FPS_OPTS = ["1", "2", "5", "10", "15", "20", "30"]
-    _TAB_INFO, _TAB_TRACKS, _TAB_PLOT, _TAB_JSON = 0, 1, 2, 3
+    _TAB_INFO, _TAB_TRACKS, _TAB_DETECT, _TAB_PLOT, _TAB_JSON = 0, 1, 2, 3, 4
 
     def __init__(self, images: list, gt_data: list):
         super().__init__()
@@ -591,6 +633,7 @@ class DebugWindow(QMainWindow):
 
         self._build_tab_info()
         self._build_tab_tracks()
+        self._build_tab_detect()
         self._build_tab_plot()
         self._build_tab_json()
         self.statusBar().showMessage(
@@ -658,9 +701,9 @@ class DebugWindow(QMainWindow):
 
         grp_ekf = QGroupBox("EKF Vehicle Tracks  (click \u2192 highlight + set plot target)")
         el = QVBoxLayout(grp_ekf); el.setContentsMargins(4, 14, 4, 4)
-        self.ekf_table = QTableWidget(0, 12)
+        self.ekf_table = QTableWidget(0, 14)
         self.ekf_table.setHorizontalHeaderLabels(
-            ["ID","x(m)","y(m)","z(m)","vx","vy","spd","W","H","TTC","hits","~"])
+            ["ID","x(m)","y(m)","z(m)","vx","vy","spd","W","H","L","Hdg\u00b0","TTC","hits","~"])
         self.ekf_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self.ekf_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.ekf_table.setSelectionMode(QTableWidget.SingleSelection)
@@ -681,6 +724,19 @@ class DebugWindow(QMainWindow):
         self.sf_table.verticalHeader().setVisible(False)
         self.sf_table.setFixedHeight(195)
         sl.addWidget(self.sf_table); vl.addWidget(grp_sf)
+
+        grp_lr = QGroupBox("Lane Relations  (selected track, this frame)")
+        lrl = QVBoxLayout(grp_lr); lrl.setContentsMargins(4, 14, 4, 4)
+        self.lr_table = QTableWidget(0, 7)
+        self.lr_table.setHorizontalHeaderLabels(
+            ["Path", "Valid", "Side", "Lat(m)", "Dist(m)", "BBox px", "Inside"])
+        self.lr_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.lr_table.setSelectionMode(QTableWidget.NoSelection)
+        self.lr_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.lr_table.setAlternatingRowColors(True)
+        self.lr_table.verticalHeader().setVisible(False)
+        self.lr_table.setFixedHeight(120)
+        lrl.addWidget(self.lr_table); vl.addWidget(grp_lr)
 
         grp_det = QGroupBox("GT Detections  (click row \u2192 highlight on image)")
         dl = QVBoxLayout(grp_det); dl.setContentsMargins(4, 14, 4, 4)
@@ -836,8 +892,11 @@ class DebugWindow(QMainWindow):
         self.v_trks.setText(str(len(trks)))
 
         self._update_ekf_table(gt)
+        self._update_lr_table(gt)
         self._update_det_table(gt)
         self._update_path_table(gt)
+        if self._tabs.currentIndex() == self._TAB_DETECT:
+            self._update_detect_tables(gt)
 
         if self._tabs.currentIndex() == self._TAB_JSON:
             self.json_edit.setPlainText(json.dumps(gt, indent=2))
@@ -848,8 +907,11 @@ class DebugWindow(QMainWindow):
         self.slider.setValue(idx)
         self.slider.blockSignals(False)
         self.lbl_frame.setText(f"Frame  {idx} / {self.n - 1}")
+        n_dets = len(gt.get("detections", []))
+        n_kal  = len(gt.get("tracks", []))
         self.statusBar().showMessage(
-            f"Frame {idx}  \u00b7  {len(boxes)} GT  \u00b7  {len(trks)} EKF tracks  \u00b7  "
+            f"Frame {idx}  \u00b7  {len(boxes)} GT  \u00b7  {n_dets} YOLO  \u00b7  "
+            f"{n_kal} Kalman  \u00b7  {len(trks)} EKF  \u00b7  "
             f"{gt.get('ego_speed_kmh', 0):.1f} km/h  \u00b7  ts={gt.get('timestamp', 0):.3f}")
 
     # =========================================================================
@@ -864,6 +926,7 @@ class DebugWindow(QMainWindow):
             tid   = t.get("track_id", "?")
             ttc   = t.get("ttc_s")
             coast = "\u2713" if t.get("is_coasting") else ""
+            hdg_deg = math.degrees(t.get("heading_rad", 0.0))
             cells = [
                 str(tid),
                 f"{t.get('x_veh',    0):.1f}",
@@ -874,6 +937,8 @@ class DebugWindow(QMainWindow):
                 f"{t.get('speed_mps',0):.1f}",
                 f"{t.get('width_m',  0):.2f}",
                 f"{t.get('height_m', 0):.2f}",
+                f"{t.get('length_m', 0):.2f}",
+                f"{hdg_deg:.1f}",
                 f"{ttc:.1f}" if ttc is not None else "\u221e",
                 str(t.get("hits", 0)),
                 coast,
@@ -947,6 +1012,186 @@ class DebugWindow(QMainWindow):
                         item.setForeground(QColor("#555577"))
                 self.sf_table.setItem(r, c, item)
         self.sf_table.blockSignals(False)
+
+
+    def _update_lr_table(self, gt: dict) -> None:
+        """Show Lane Relations for the selected EKF track (4 paths x 7 cols)."""
+        lr_entry = None
+        if self._hl_tid is not None:
+            for e in gt.get("lane_relations", []):
+                if e.get("track_id") == self._hl_tid:
+                    lr_entry = e; break
+
+        relations = (lr_entry or {}).get("relations", {})
+        _PATH_KEYS   = ["kinematic", "drivable_path", "host_lane", "hdmap"]
+        _PATH_LABELS_LR = {
+            "kinematic":     "Kinematic",
+            "drivable_path": "Drivable",
+            "host_lane":     "Host Lane",
+            "hdmap":         "HD Map",
+        }
+        self.lr_table.blockSignals(True)
+        self.lr_table.setRowCount(len(_PATH_KEYS))
+        for r, pt in enumerate(_PATH_KEYS):
+            rel    = relations.get(pt, {})
+            valid  = rel.get("valid", False)
+            inside = rel.get("inside_bounds", False)
+            v_col  = "#44cc88" if valid   else "#cc4444"
+            i_col  = "#44cc88" if inside  else "#cc4444"
+            cells  = [
+                _PATH_LABELS_LR[pt],
+                "\u2713" if valid  else "\u2717",
+                rel.get("side", "\u2014") if valid else "\u2014",
+                f"{rel.get('dist_lateral_m',   0):.2f}" if valid else "\u2014",
+                f"{rel.get('dist_to_center_m', 0):.2f}" if valid else "\u2014",
+                f"{rel.get('dist_bbox_px',     0):.0f}" if valid else "\u2014",
+                "\u2713" if inside else "\u2717",
+            ]
+            for c, txt in enumerate(cells):
+                item = QTableWidgetItem(txt)
+                item.setTextAlignment(Qt.AlignCenter)
+                if c == 1:
+                    item.setForeground(QColor(v_col))
+                elif c == 6:
+                    item.setForeground(QColor(i_col if valid else "#555577"))
+                self.lr_table.setItem(r, c, item)
+        self.lr_table.blockSignals(False)
+
+    def _build_tab_detect(self) -> None:
+        """Detections tab: raw YOLO detections, Kalman tracks, 3D GT boxes."""
+        w = QWidget(); vl = QVBoxLayout(w); vl.setSpacing(4); vl.setContentsMargins(4, 4, 4, 4)
+
+        grp_yolo = QGroupBox("Raw YOLO Detections  (pre-tracking, this frame)")
+        yl = QVBoxLayout(grp_yolo); yl.setContentsMargins(4, 14, 4, 4)
+        self.yolo_table = QTableWidget(0, 7)
+        self.yolo_table.setHorizontalHeaderLabels(
+            ["#", "Class", "Conf", "x1", "y1", "x2", "y2"])
+        self.yolo_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.yolo_table.setSelectionMode(QTableWidget.NoSelection)
+        self.yolo_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.yolo_table.setAlternatingRowColors(True)
+        self.yolo_table.verticalHeader().setVisible(False)
+        self.yolo_table.setFixedHeight(150)
+        yl.addWidget(self.yolo_table); vl.addWidget(grp_yolo)
+
+        grp_kal = QGroupBox("Kalman Tracker  (all classes, confirmed tracks)")
+        kl = QVBoxLayout(grp_kal); kl.setContentsMargins(4, 14, 4, 4)
+        self.kalman_table = QTableWidget(0, 9)
+        self.kalman_table.setHorizontalHeaderLabels(
+            ["ID", "Class", "x(m)", "y(m)", "vx", "vy", "hits", "TTC", "~"])
+        self.kalman_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.kalman_table.setSelectionMode(QTableWidget.NoSelection)
+        self.kalman_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.kalman_table.setAlternatingRowColors(True)
+        self.kalman_table.verticalHeader().setVisible(False)
+        self.kalman_table.setFixedHeight(150)
+        kl.addWidget(self.kalman_table); vl.addWidget(grp_kal)
+
+        grp_3d = QGroupBox("GT 3D Boxes  (Waymo laser labels, vehicle frame)")
+        gl = QVBoxLayout(grp_3d); gl.setContentsMargins(4, 14, 4, 4)
+        self.gt3d_table = QTableWidget(0, 10)
+        self.gt3d_table.setHorizontalHeaderLabels(
+            ["ID", "Type", "X(m)", "Y(m)", "Z(m)", "L", "W", "H", "Hdg\u00b0", "LiDAR"])
+        self.gt3d_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.gt3d_table.setSelectionMode(QTableWidget.NoSelection)
+        self.gt3d_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.gt3d_table.setAlternatingRowColors(True)
+        self.gt3d_table.verticalHeader().setVisible(False)
+        gl.addWidget(self.gt3d_table); vl.addWidget(grp_3d, stretch=1)
+
+        self._tabs.addTab(w, "Detections")
+
+    def _update_detect_tables(self, gt: dict) -> None:
+        """Refresh YOLO detections, Kalman tracks, and 3D GT box tables."""
+        _DET_COLORS = {
+            "vehicle":    "#6699ff",
+            "pedestrian": "#44cc88",
+            "cyclist":    "#ffcc44",
+            "other":      "#bbbbcc",
+        }
+        _TYPE_COLORS_3D = {1: "#6699ff", 2: "#44cc88", 3: "#bbbbcc", 4: "#ffcc44"}
+        _TYPE_NAMES_3D  = {1: "Vehicle", 2: "Pedestrian", 3: "Sign", 4: "Cyclist"}
+
+        # ── Raw YOLO detections ─────────────────────────────────────────────
+        dets = gt.get("detections", [])
+        self.yolo_table.blockSignals(True)
+        self.yolo_table.setRowCount(len(dets))
+        for r, d in enumerate(dets):
+            bbox = d.get("bbox_xyxy") or [0, 0, 0, 0]
+            cells = [
+                str(r),
+                d.get("class_name", "?"),
+                f"{d.get('confidence', 0):.3f}",
+                f"{bbox[0]:.0f}", f"{bbox[1]:.0f}",
+                f"{bbox[2]:.0f}", f"{bbox[3]:.0f}",
+            ]
+            col = _DET_COLORS.get(d.get("class_name", ""), "#bbbbcc")
+            for c, txt in enumerate(cells):
+                item = QTableWidgetItem(txt)
+                item.setTextAlignment(Qt.AlignCenter)
+                if c == 1:
+                    item.setForeground(QColor(col))
+                self.yolo_table.setItem(r, c, item)
+        self.yolo_table.blockSignals(False)
+
+        # ── Kalman TrackManager tracks (all classes) ────────────────────────
+        tracks = gt.get("tracks", [])
+        self.kalman_table.blockSignals(True)
+        self.kalman_table.setRowCount(len(tracks))
+        for r, t in enumerate(tracks):
+            tid   = t.get("track_id", "?")
+            ttc   = t.get("ttc_s")
+            coast = "\u2713" if t.get("is_coasting") else ""
+            cells = [
+                str(tid),
+                t.get("class_name", "?"),
+                f"{t.get('x_veh', 0):.1f}",
+                f"{t.get('y_veh', 0):.1f}",
+                f"{t.get('vx_veh', 0):.1f}",
+                f"{t.get('vy_veh', 0):.1f}",
+                str(t.get("hits", 0)),
+                f"{ttc:.1f}" if ttc is not None else "\u221e",
+                coast,
+            ]
+            try:
+                b, g, rr = _track_color(int(tid))
+                hex_col = f"#{rr:02x}{g:02x}{b:02x}"
+            except (TypeError, ValueError):
+                hex_col = "#aaaaaa"
+            for c, txt in enumerate(cells):
+                item = QTableWidgetItem(txt)
+                item.setTextAlignment(Qt.AlignCenter)
+                if c == 0:
+                    item.setForeground(QColor(hex_col))
+                self.kalman_table.setItem(r, c, item)
+        self.kalman_table.blockSignals(False)
+
+        # ── GT 3D laser-label boxes ─────────────────────────────────────────
+        boxes3d = gt.get("boxes_3d", [])
+        self.gt3d_table.blockSignals(True)
+        self.gt3d_table.setRowCount(len(boxes3d))
+        for r, b in enumerate(boxes3d):
+            type_id = b.get("type", 0)
+            cells = [
+                str(b.get("id", "?"))[:8],
+                _TYPE_NAMES_3D.get(type_id, "?"),
+                f"{b.get('center_x', 0):.1f}",
+                f"{b.get('center_y', 0):.1f}",
+                f"{b.get('center_z', 0):.2f}",
+                f"{b.get('length',   0):.2f}",
+                f"{b.get('width',    0):.2f}",
+                f"{b.get('height',   0):.2f}",
+                f"{math.degrees(b.get('heading', 0)):.1f}",
+                str(b.get("num_lidar_points", 0)),
+            ]
+            col = _TYPE_COLORS_3D.get(type_id, "#bbbbcc")
+            for c, txt in enumerate(cells):
+                item = QTableWidgetItem(txt)
+                item.setTextAlignment(Qt.AlignCenter)
+                if c == 1:
+                    item.setForeground(QColor(col))
+                self.gt3d_table.setItem(r, c, item)
+        self.gt3d_table.blockSignals(False)
 
     def _update_det_table(self, gt: dict) -> None:
         boxes = gt.get("boxes_2d", [])
@@ -1037,6 +1282,7 @@ class DebugWindow(QMainWindow):
             if self.plot_tid_cb.itemData(i) == self._hl_tid:
                 self.plot_tid_cb.setCurrentIndex(i); break
         self._update_sf_table(self.gt_data[self._idx])
+        self._update_lr_table(self.gt_data[self._idx])
         self._cache_key = None
         self.img_view.set_bgr(self._render_image(self._idx))
 
@@ -1049,7 +1295,9 @@ class DebugWindow(QMainWindow):
 
     @pyqtSlot(int)
     def _on_tab_changed(self, idx: int) -> None:
-        if idx == self._TAB_JSON:
+        if idx == self._TAB_DETECT:
+            self._update_detect_tables(self.gt_data[self._idx])
+        elif idx == self._TAB_JSON:
             self.json_edit.setPlainText(json.dumps(self.gt_data[self._idx], indent=2))
 
     def _on_plot_btn(self) -> None:
@@ -1109,6 +1357,7 @@ class DebugWindow(QMainWindow):
         elif k in (Qt.Key_Plus, Qt.Key_Equal):    self._change_speed(+1)
         elif k == Qt.Key_Minus:                   self._change_speed(-1)
         elif k == Qt.Key_T:  self._tabs.setCurrentIndex(self._TAB_TRACKS)
+        elif k == Qt.Key_D:  self._tabs.setCurrentIndex(self._TAB_DETECT)
         elif k == Qt.Key_P:  self._tabs.setCurrentIndex(self._TAB_PLOT)
         elif k == Qt.Key_J:  self._tabs.setCurrentIndex(self._TAB_JSON)
         else:                super().keyPressEvent(e)
@@ -1182,7 +1431,5 @@ def main():
     sys.exit(qapp.exec_())
 
 
-if __name__ == "__main__":
-    main()
 if __name__ == "__main__":
     main()

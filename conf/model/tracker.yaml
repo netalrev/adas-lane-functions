@@ -15,7 +15,9 @@ max_age_tentative: 3
 # Confirmed tracks (hits >= min_hits) survive this many consecutive misses
 # before being killed.  Longer coast allows the Kalman to bridge brief
 # occlusions and re-associate without an ID jump.
-max_age_confirmed: 12
+# 20 frames = 2.0 s at 10 Hz — enough to bridge a hill crest where the
+# CIPV temporarily disappears from the detector's view.
+max_age_confirmed: 20
 
 # Kept for backward compatibility (unused when both _tentative/_confirmed
 # are present; acts as fallback for both if they are absent).

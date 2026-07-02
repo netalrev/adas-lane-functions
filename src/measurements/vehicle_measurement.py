@@ -412,6 +412,17 @@ def build_kalman_input(
         and x_gnd > near_field_m
     )
 
+    # Aspect-ratio consistency gate: on a pitched road the height_proj and
+    # width_proj range estimates diverge significantly from the ground-plane
+    # y0_proj value.  When the relative disagreement exceeds 40 %, the aspect
+    # measurements are unreliable (Z_veh ≠ 0 assumption breaks) and the EKF
+    # update is restricted to position-only to avoid corrupting size state.
+    if use_size and bundle.height_proj.valid and bundle.width_proj.valid:
+        h_div = abs(bundle.height_proj.x_m - x_gnd) / max(x_gnd, 1.0)
+        w_div = abs(bundle.width_proj.x_m  - x_gnd) / max(x_gnd, 1.0)
+        if h_div > 0.40 or w_div > 0.40:
+            use_size = False
+
     return KalmanMeasurement(
         x_gnd=x_gnd,
         y_gnd=y_gnd,

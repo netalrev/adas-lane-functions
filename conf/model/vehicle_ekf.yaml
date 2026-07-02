@@ -14,7 +14,9 @@ max_age_tentative: 3
 
 # Confirmed mature tracks survive this many consecutive misses (full occlusion
 # tolerance).  Mirrors the value used in the general TrackManager.
-max_age_confirmed: 12
+# 20 frames = 2.0 s at 10 Hz — enough to bridge a hill crest where the
+# CIPV temporarily disappears from the detector's view.
+max_age_confirmed: 20
 
 # Minimum matched-detection count before a track is reported in output.
 # Set to 2 (stricter than the general tracker) to reduce false positives.

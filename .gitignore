@@ -29,6 +29,7 @@ src/data/models/
 # ── Pipeline outputs ──────────────────────────────────────────────────────
 outputs/
 CLRNet/outputs/
+tests/
 
 # ── C++ build artefacts ────────────────────────────────────────────────────
 cpp/build/
