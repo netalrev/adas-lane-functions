@@ -3,9 +3,9 @@
 # Populate this file by running:
 #   python scripts/download_waymo_segments.py --num-segments 10 --output-dir ./src/data
 
+src/data/segment-1191788760630624072_3880_000_3900_000_with_camera_labels.tfrecord
 src/data/segment-5495302100265783181_80_000_100_000_with_camera_labels.tfrecord
 src/data/segment-12844373518178303651_2140_000_2160_000_with_camera_labels.tfrecord
-src/data/segment-1191788760630624072_3880_000_3900_000_with_camera_labels.tfrecord
 src/data/segment-3872781118550194423_3654_670_3674_670_with_camera_labels.tfrecord
 src/data/segment-16372013171456210875_5631_040_5651_040_with_camera_labels.tfrecord
 src/data/segment-2217043033232259972_2720_000_2740_000_with_camera_labels.tfrecord

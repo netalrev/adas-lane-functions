@@ -29,7 +29,6 @@ src/data/models/
 # ── Pipeline outputs ──────────────────────────────────────────────────────
 outputs/
 CLRNet/outputs/
-tests/
 
 # ── C++ build artefacts ────────────────────────────────────────────────────
 cpp/build/
@@ -42,6 +41,14 @@ multirun/
 # ── Comet ML ──────────────────────────────────────────────────────────────
 .comet.config
 .env
+
+# ── Testing ───────────────────────────────────────────────────────────────
+# tests/golden/ fixtures ARE tracked — they are the bit-exact regression oracle.
+.pytest_cache/
+tests/golden/_tmp*/
+
+# ── Local scratch — not part of this project, never uploaded ──────────────
+archive/
 
 # ── Jupyter ───────────────────────────────────────────────────────────────
 .ipynb_checkpoints/
