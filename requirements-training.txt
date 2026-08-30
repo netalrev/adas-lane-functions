@@ -1,0 +1,17 @@
+# Dependencies for Phase 3-5 (feature dataset build, training, HP search,
+# ONNX export/quantization) -- NOT needed for the core P1/P2 perception
+# pipeline (pipeline_input.py only needs requirements.txt).
+# Install with: pip install -r requirements.txt -r requirements-training.txt
+#
+# torch/torchvision CPU wheels need PyTorch's own index:
+#   pip install -r requirements-training.txt --extra-index-url https://download.pytorch.org/whl/cpu
+torch==1.12.1+cpu
+torchvision==0.13.1+cpu
+optuna==4.9.0
+onnx==1.21.0
+onnxslim==0.1.93
+scipy==1.15.3
+
+# scripts/download_models.py (YOLOv8 -> ONNX export)
+ultralytics==8.4.50
+ultralytics-thop==2.0.19

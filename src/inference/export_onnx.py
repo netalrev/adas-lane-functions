@@ -89,6 +89,11 @@ class ModelExporter:
         model.eval()
         model.to(self._device)
 
+        # Authoritative sequence length from the saved config -- do not infer
+        # it from the positional-encoding buffer shape, which includes the
+        # [CLS] token position and is easy to get off-by-one on.
+        self._seq_len = int(training_cfg.model.seq_len)
+
         return model, {"epoch": ckpt.get("epoch"), "val_metrics": ckpt.get("val_metrics", {})}
 
     def export(self, output_path: str | Path) -> Path:
@@ -104,8 +109,7 @@ class ModelExporter:
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         model, meta = self.load_model()
-        T = int(next(iter(model.pos_enc.pe.shape[1:])))  # seq_len from PE buffer
-        T = T - 1  # subtract CLS token position
+        T = self._seq_len
         D = model.input_proj.in_features
 
         dummy = torch.zeros(1, T, D, dtype=torch.float32, device=self._device)
@@ -142,7 +146,7 @@ class ModelExporter:
         -------
         dict with keys: max_cipv_delta, max_lane_delta, max_cut_in_delta  (floats)
         """
-        T = int(model.pos_enc.pe.shape[1]) - 1
+        T = self._seq_len
         D = model.input_proj.in_features
         x_np = np.random.randn(4, T, D).astype(np.float32)
 

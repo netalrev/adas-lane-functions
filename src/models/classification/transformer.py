@@ -116,7 +116,7 @@ class MFTransformer(nn.Module):
         nn.init.trunc_normal_(self.cls_token, std=0.02)
 
         # ── Positional encoding (T+1 positions) ───────────────────────────
-        self.pos_enc = PositionalEncoding(d_model, max_len=int(m.seq_len) + 2)
+        self.pos_enc = PositionalEncoding(d_model, max_len=int(m.seq_len) + 1)
 
         # ── Transformer encoder ───────────────────────────────────────────
         encoder_layer = nn.TransformerEncoderLayer(

@@ -218,14 +218,21 @@ def main() -> None:
         sys.exit(1)
     cfg = OmegaConf.load(cfg_path)
 
-    # Read segment list
+    # Read segment list. Same format as pipeline_input.py's segment_list:
+    # one path per line, "#" starts a comment, blank lines ignored. Each
+    # line is reduced to its bare segment name (no dir, no extension) to
+    # match the {json_dir}/{segment_name}.json naming convention.
     seg_list_path = Path(args.segments_list)
     if not seg_list_path.exists():
         print(f"[ERROR] Segment list not found: {seg_list_path}")
         sys.exit(1)
 
+    segment_names = []
     with open(seg_list_path, "r", encoding="utf-8") as fh:
-        segment_names = [ln.strip() for ln in fh if ln.strip()]
+        for line in fh:
+            line = line.split("#")[0].strip()
+            if line:
+                segment_names.append(Path(line).stem)
 
     if not segment_names:
         print("[ERROR] Segment list is empty.")

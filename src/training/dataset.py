@@ -50,7 +50,8 @@ class MFDataset(Dataset):
     split : str
         One of "train", "val", "test".
     cfg : DictConfig
-        Hydra training config node.  Reads cfg.data.{train_fraction,
+        Full Hydra training-run config (same object passed to Trainer and
+        MFTransformer). Reads cfg.training.data.{train_fraction,
         val_fraction, seed}.
     """
 
@@ -77,11 +78,11 @@ class MFDataset(Dataset):
         # --- Segment-level split -------------------------------------------
         unique_segs = sorted(set(all_seg_names.tolist()))
         n_segs      = len(unique_segs)
-        rng         = np.random.default_rng(int(cfg.data.seed))
+        rng         = np.random.default_rng(int(cfg.training.data.seed))
         perm        = rng.permutation(n_segs)
 
-        n_train = int(n_segs * float(cfg.data.train_fraction))
-        n_val   = int(n_segs * float(cfg.data.val_fraction))
+        n_train = int(n_segs * float(cfg.training.data.train_fraction))
+        n_val   = int(n_segs * float(cfg.training.data.val_fraction))
 
         if split == "train":
             chosen_indices = set(perm[:n_train].tolist())

@@ -129,6 +129,12 @@ class DatasetWriter:
             Total number of samples now in the file after this flush.
         """
         if not self._mf:
+            # Nothing newly staged -- report the existing on-disk total
+            # instead of 0, so a redundant flush() call doesn't look like
+            # the dataset is empty.
+            if self._path.exists():
+                with h5py.File(self._path, "r") as f:
+                    return int(f["mf_sequences"].shape[0]) if "mf_sequences" in f else 0
             return 0
 
         n_new = len(self._mf)

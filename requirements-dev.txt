@@ -1,3 +1,7 @@
 # Development-only dependencies (testing, not needed to run the pipeline).
 # Install with: pip install -r requirements.txt -r requirements-dev.txt
 pytest==9.1.1
+
+# debug_viewer.py (interactive GUI, not needed for batch runs or tests)
+PyQt5==5.15.11
+matplotlib==3.10.9
