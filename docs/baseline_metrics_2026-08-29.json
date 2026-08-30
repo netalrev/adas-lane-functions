@@ -1,0 +1,756 @@
+{
+  "summary": {
+    "n_segments": 13,
+    "n_frames": 2472,
+    "lane_quality": {
+      "kinematic": {
+        "valid_rate": 1.0,
+        "mean_abs_error_px": null
+      },
+      "drivable_path": {
+        "valid_rate": 1.0,
+        "mean_abs_error_px": 104.798
+      },
+      "host_lane": {
+        "valid_rate": 0.0,
+        "mean_abs_error_px": null
+      }
+    },
+    "state_estimation": {
+      "n_matched": 607,
+      "pos_rmse_m": 1.986,
+      "vel_rmse_mps": 22.436,
+      "id_switch_count": 132
+    }
+  },
+  "per_segment": [
+    {
+      "segment_name": "segment-10017090168044687777_6380_000_6400_000_with_camera_labels",
+      "n_frames": 100,
+      "lane_quality": {
+        "kinematic": {
+          "valid_rate": 1.0,
+          "comparable_to_hdmap": false,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        },
+        "drivable_path": {
+          "valid_rate": 1.0,
+          "comparable_to_hdmap": true,
+          "n_compared_frames": 50,
+          "mean_abs_error_px": 129.6
+        },
+        "host_lane": {
+          "valid_rate": 0.0,
+          "comparable_to_hdmap": true,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        }
+      },
+      "hdmap_quality": {
+        "valid_rate": 0.5,
+        "confidence_mean": 1.0
+      },
+      "state_estimation": {
+        "n_matched": 0,
+        "pos_rmse_m": null,
+        "vel_rmse_mps": null,
+        "id_switch_count": 0
+      },
+      "lane_relations": {
+        "kinematic": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "drivable_path": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "host_lane": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "hdmap": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        }
+      }
+    },
+    {
+      "segment_name": "segment-10750135302241325253_180_000_200_000_with_camera_labels",
+      "n_frames": 199,
+      "lane_quality": {
+        "kinematic": {
+          "valid_rate": 1.0,
+          "comparable_to_hdmap": false,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        },
+        "drivable_path": {
+          "valid_rate": 1.0,
+          "comparable_to_hdmap": true,
+          "n_compared_frames": 177,
+          "mean_abs_error_px": 71.72
+        },
+        "host_lane": {
+          "valid_rate": 0.0,
+          "comparable_to_hdmap": true,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        }
+      },
+      "hdmap_quality": {
+        "valid_rate": 0.889,
+        "confidence_mean": 1.0
+      },
+      "state_estimation": {
+        "n_matched": 0,
+        "pos_rmse_m": null,
+        "vel_rmse_mps": null,
+        "id_switch_count": 0
+      },
+      "lane_relations": {
+        "kinematic": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "drivable_path": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "host_lane": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "hdmap": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        }
+      }
+    },
+    {
+      "segment_name": "segment-1191788760630624072_3880_000_3900_000_with_camera_labels",
+      "n_frames": 199,
+      "lane_quality": {
+        "kinematic": {
+          "valid_rate": 1.0,
+          "comparable_to_hdmap": false,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        },
+        "drivable_path": {
+          "valid_rate": 1.0,
+          "comparable_to_hdmap": true,
+          "n_compared_frames": 123,
+          "mean_abs_error_px": 120.0
+        },
+        "host_lane": {
+          "valid_rate": 0.0,
+          "comparable_to_hdmap": true,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        }
+      },
+      "hdmap_quality": {
+        "valid_rate": 0.698,
+        "confidence_mean": 1.0
+      },
+      "state_estimation": {
+        "n_matched": 322,
+        "pos_rmse_m": 2.008,
+        "vel_rmse_mps": 35.881,
+        "id_switch_count": 64
+      },
+      "lane_relations": {
+        "kinematic": {
+          "valid_rate": 1.0,
+          "inside_rate": 0.0,
+          "n_observations": 1692
+        },
+        "drivable_path": {
+          "valid_rate": 1.0,
+          "inside_rate": 0.013,
+          "n_observations": 1692
+        },
+        "host_lane": {
+          "valid_rate": 0.797,
+          "inside_rate": 0.09,
+          "n_observations": 1692
+        },
+        "hdmap": {
+          "valid_rate": 0.709,
+          "inside_rate": 0.058,
+          "n_observations": 1692
+        }
+      }
+    },
+    {
+      "segment_name": "segment-12844373518178303651_2140_000_2160_000_with_camera_labels",
+      "n_frames": 199,
+      "lane_quality": {
+        "kinematic": {
+          "valid_rate": 1.0,
+          "comparable_to_hdmap": false,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        },
+        "drivable_path": {
+          "valid_rate": 1.0,
+          "comparable_to_hdmap": true,
+          "n_compared_frames": 44,
+          "mean_abs_error_px": 152.21
+        },
+        "host_lane": {
+          "valid_rate": 0.0,
+          "comparable_to_hdmap": true,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        }
+      },
+      "hdmap_quality": {
+        "valid_rate": 0.226,
+        "confidence_mean": 1.0
+      },
+      "state_estimation": {
+        "n_matched": 47,
+        "pos_rmse_m": 1.633,
+        "vel_rmse_mps": 13.963,
+        "id_switch_count": 0
+      },
+      "lane_relations": {
+        "kinematic": {
+          "valid_rate": 1.0,
+          "inside_rate": 0.0,
+          "n_observations": 123
+        },
+        "drivable_path": {
+          "valid_rate": 1.0,
+          "inside_rate": 0.0,
+          "n_observations": 123
+        },
+        "host_lane": {
+          "valid_rate": 1.0,
+          "inside_rate": 0.0,
+          "n_observations": 123
+        },
+        "hdmap": {
+          "valid_rate": 0.154,
+          "inside_rate": 0.0,
+          "n_observations": 123
+        }
+      }
+    },
+    {
+      "segment_name": "segment-13181198025433053194_2620_770_2640_770_with_camera_labels",
+      "n_frames": 199,
+      "lane_quality": {
+        "kinematic": {
+          "valid_rate": 1.0,
+          "comparable_to_hdmap": false,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        },
+        "drivable_path": {
+          "valid_rate": 1.0,
+          "comparable_to_hdmap": true,
+          "n_compared_frames": 190,
+          "mean_abs_error_px": 58.32
+        },
+        "host_lane": {
+          "valid_rate": 0.0,
+          "comparable_to_hdmap": true,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        }
+      },
+      "hdmap_quality": {
+        "valid_rate": 0.955,
+        "confidence_mean": 1.0
+      },
+      "state_estimation": {
+        "n_matched": 0,
+        "pos_rmse_m": null,
+        "vel_rmse_mps": null,
+        "id_switch_count": 0
+      },
+      "lane_relations": {
+        "kinematic": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "drivable_path": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "host_lane": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "hdmap": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        }
+      }
+    },
+    {
+      "segment_name": "segment-14777753086917826209_4147_000_4167_000_with_camera_labels",
+      "n_frames": 199,
+      "lane_quality": {
+        "kinematic": {
+          "valid_rate": 1.0,
+          "comparable_to_hdmap": false,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        },
+        "drivable_path": {
+          "valid_rate": 1.0,
+          "comparable_to_hdmap": true,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        },
+        "host_lane": {
+          "valid_rate": 0.0,
+          "comparable_to_hdmap": true,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        }
+      },
+      "hdmap_quality": {
+        "valid_rate": 0.0,
+        "confidence_mean": null
+      },
+      "state_estimation": {
+        "n_matched": 0,
+        "pos_rmse_m": null,
+        "vel_rmse_mps": null,
+        "id_switch_count": 0
+      },
+      "lane_relations": {
+        "kinematic": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "drivable_path": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "host_lane": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "hdmap": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        }
+      }
+    },
+    {
+      "segment_name": "segment-16372013171456210875_5631_040_5651_040_with_camera_labels",
+      "n_frames": 199,
+      "lane_quality": {
+        "kinematic": {
+          "valid_rate": 1.0,
+          "comparable_to_hdmap": false,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        },
+        "drivable_path": {
+          "valid_rate": 1.0,
+          "comparable_to_hdmap": true,
+          "n_compared_frames": 177,
+          "mean_abs_error_px": 131.8
+        },
+        "host_lane": {
+          "valid_rate": 0.0,
+          "comparable_to_hdmap": true,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        }
+      },
+      "hdmap_quality": {
+        "valid_rate": 0.889,
+        "confidence_mean": 1.0
+      },
+      "state_estimation": {
+        "n_matched": 0,
+        "pos_rmse_m": null,
+        "vel_rmse_mps": null,
+        "id_switch_count": 0
+      },
+      "lane_relations": {
+        "kinematic": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "drivable_path": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "host_lane": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "hdmap": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        }
+      }
+    },
+    {
+      "segment_name": "segment-17342274091983078806_80_000_100_000_with_camera_labels",
+      "n_frames": 198,
+      "lane_quality": {
+        "kinematic": {
+          "valid_rate": 1.0,
+          "comparable_to_hdmap": false,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        },
+        "drivable_path": {
+          "valid_rate": 1.0,
+          "comparable_to_hdmap": true,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        },
+        "host_lane": {
+          "valid_rate": 0.0,
+          "comparable_to_hdmap": true,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        }
+      },
+      "hdmap_quality": {
+        "valid_rate": 0.0,
+        "confidence_mean": null
+      },
+      "state_estimation": {
+        "n_matched": 0,
+        "pos_rmse_m": null,
+        "vel_rmse_mps": null,
+        "id_switch_count": 0
+      },
+      "lane_relations": {
+        "kinematic": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "drivable_path": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "host_lane": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "hdmap": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        }
+      }
+    },
+    {
+      "segment_name": "segment-18286677872269962604_3520_000_3540_000_with_camera_labels",
+      "n_frames": 199,
+      "lane_quality": {
+        "kinematic": {
+          "valid_rate": 1.0,
+          "comparable_to_hdmap": false,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        },
+        "drivable_path": {
+          "valid_rate": 1.0,
+          "comparable_to_hdmap": true,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        },
+        "host_lane": {
+          "valid_rate": 0.0,
+          "comparable_to_hdmap": true,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        }
+      },
+      "hdmap_quality": {
+        "valid_rate": 0.0,
+        "confidence_mean": null
+      },
+      "state_estimation": {
+        "n_matched": 0,
+        "pos_rmse_m": null,
+        "vel_rmse_mps": null,
+        "id_switch_count": 0
+      },
+      "lane_relations": {
+        "kinematic": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "drivable_path": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "host_lane": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "hdmap": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        }
+      }
+    },
+    {
+      "segment_name": "segment-2217043033232259972_2720_000_2740_000_with_camera_labels",
+      "n_frames": 198,
+      "lane_quality": {
+        "kinematic": {
+          "valid_rate": 1.0,
+          "comparable_to_hdmap": false,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        },
+        "drivable_path": {
+          "valid_rate": 1.0,
+          "comparable_to_hdmap": true,
+          "n_compared_frames": 54,
+          "mean_abs_error_px": 109.34
+        },
+        "host_lane": {
+          "valid_rate": 0.0,
+          "comparable_to_hdmap": true,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        }
+      },
+      "hdmap_quality": {
+        "valid_rate": 0.273,
+        "confidence_mean": 1.0
+      },
+      "state_estimation": {
+        "n_matched": 0,
+        "pos_rmse_m": null,
+        "vel_rmse_mps": null,
+        "id_switch_count": 0
+      },
+      "lane_relations": {
+        "kinematic": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "drivable_path": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "host_lane": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "hdmap": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        }
+      }
+    },
+    {
+      "segment_name": "segment-3872781118550194423_3654_670_3674_670_with_camera_labels",
+      "n_frames": 199,
+      "lane_quality": {
+        "kinematic": {
+          "valid_rate": 1.0,
+          "comparable_to_hdmap": false,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        },
+        "drivable_path": {
+          "valid_rate": 1.0,
+          "comparable_to_hdmap": true,
+          "n_compared_frames": 4,
+          "mean_abs_error_px": 97.27
+        },
+        "host_lane": {
+          "valid_rate": 0.0,
+          "comparable_to_hdmap": true,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        }
+      },
+      "hdmap_quality": {
+        "valid_rate": 0.02,
+        "confidence_mean": 1.0
+      },
+      "state_estimation": {
+        "n_matched": 0,
+        "pos_rmse_m": null,
+        "vel_rmse_mps": null,
+        "id_switch_count": 0
+      },
+      "lane_relations": {
+        "kinematic": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "drivable_path": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "host_lane": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "hdmap": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        }
+      }
+    },
+    {
+      "segment_name": "segment-5495302100265783181_80_000_100_000_with_camera_labels",
+      "n_frames": 198,
+      "lane_quality": {
+        "kinematic": {
+          "valid_rate": 1.0,
+          "comparable_to_hdmap": false,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        },
+        "drivable_path": {
+          "valid_rate": 1.0,
+          "comparable_to_hdmap": true,
+          "n_compared_frames": 12,
+          "mean_abs_error_px": 267.02
+        },
+        "host_lane": {
+          "valid_rate": 0.0,
+          "comparable_to_hdmap": true,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        }
+      },
+      "hdmap_quality": {
+        "valid_rate": 0.061,
+        "confidence_mean": 1.0
+      },
+      "state_estimation": {
+        "n_matched": 238,
+        "pos_rmse_m": 2.027,
+        "vel_rmse_mps": 5.919,
+        "id_switch_count": 68
+      },
+      "lane_relations": {
+        "kinematic": {
+          "valid_rate": 1.0,
+          "inside_rate": 0.0,
+          "n_observations": 544
+        },
+        "drivable_path": {
+          "valid_rate": 1.0,
+          "inside_rate": 0.0,
+          "n_observations": 544
+        },
+        "host_lane": {
+          "valid_rate": 0.682,
+          "inside_rate": 0.035,
+          "n_observations": 544
+        },
+        "hdmap": {
+          "valid_rate": 0.051,
+          "inside_rate": 0.0,
+          "n_observations": 544
+        }
+      }
+    },
+    {
+      "segment_name": "segment-7837172662136597262_1140_000_1160_000_with_camera_labels",
+      "n_frames": 186,
+      "lane_quality": {
+        "kinematic": {
+          "valid_rate": 1.0,
+          "comparable_to_hdmap": false,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        },
+        "drivable_path": {
+          "valid_rate": 1.0,
+          "comparable_to_hdmap": true,
+          "n_compared_frames": 112,
+          "mean_abs_error_px": 127.55
+        },
+        "host_lane": {
+          "valid_rate": 0.0,
+          "comparable_to_hdmap": true,
+          "n_compared_frames": 0,
+          "mean_abs_error_px": null
+        }
+      },
+      "hdmap_quality": {
+        "valid_rate": 0.602,
+        "confidence_mean": 1.0
+      },
+      "state_estimation": {
+        "n_matched": 0,
+        "pos_rmse_m": null,
+        "vel_rmse_mps": null,
+        "id_switch_count": 0
+      },
+      "lane_relations": {
+        "kinematic": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "drivable_path": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "host_lane": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        },
+        "hdmap": {
+          "valid_rate": 0.0,
+          "inside_rate": null,
+          "n_observations": 0
+        }
+      }
+    }
+  ]
+}

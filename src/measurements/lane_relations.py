@@ -430,15 +430,26 @@ def _lateral_offset(
     Signed lateral offset and unsigned distance from (px, py) to the polyline.
 
     Strategy: iterate over every segment, project the point onto it (clamped
-    to the segment endpoints), and keep the closest foot-of-perpendicular.
-    The signed lateral is computed from the 2D cross-product against the
-    local segment direction at the winning foot point.
+    to the segment endpoints) to find the closest foot-of-perpendicular and
+    the true nearest-point distance. The signed LATERAL offset is then
+    recomputed using the *unclamped* projection onto that same segment's
+    infinite line, which is always exactly perpendicular to the segment by
+    construction. This matters when the query point's forward position falls
+    outside the polyline's own sampled range (e.g. a vehicle behind the ego,
+    where the path only extends forward from it): clamping the foot point
+    there would otherwise leak a longitudinal distance into what is supposed
+    to be a purely lateral measurement. For points that project inside a
+    segment (the common case), the clamped and unclamped feet are identical,
+    so this is a no-op and the two returned values keep their original
+    relationship (|signed_lateral| == unsigned_dist).
 
     Returns
     -------
     (signed_lateral_m, unsigned_dist_m)
         signed_lateral_m > 0 → vehicle is LEFT  of the path direction.
         signed_lateral_m < 0 → vehicle is RIGHT of the path direction.
+        unsigned_dist_m is the true nearest-point distance (may exceed
+        |signed_lateral_m| when the nearest point is a clamped path endpoint).
     """
     point = np.array([px, py], dtype=np.float64)
 
@@ -459,18 +470,24 @@ def _lateral_offset(
                 best_signed = 0.0
             continue
 
-        # Project point onto segment, clamp t ∈ [0, 1] to stay on the segment
-        t    = float(np.dot(point - p0, seg)) / seg_len_sq
-        foot = p0 + np.clip(t, 0.0, 1.0) * seg
-        diff = point - foot
-        d    = float(np.linalg.norm(diff))
+        # Project point onto segment, clamp t ∈ [0, 1] to find the true
+        # nearest-point distance (used only to pick the winning segment).
+        t         = float(np.dot(point - p0, seg)) / seg_len_sq
+        t_clamped = np.clip(t, 0.0, 1.0)
+        foot      = p0 + t_clamped * seg
+        d         = float(np.linalg.norm(point - foot))
 
         if d < best_dist:
             best_dist = d
+            # Lateral offset uses the UNCLAMPED projection: the residual
+            # against the infinite line is always perpendicular to the
+            # segment, so no longitudinal/extrapolation distance leaks in.
+            foot_unclamped = p0 + t * seg
+            diff_perp = point - foot_unclamped
             # 2D cross-product z-component: seg.x*diff.y − seg.y*diff.x
             # Positive → point is counter-clockwise (LEFT) of the segment direction
-            cross       = float(seg[0] * diff[1] - seg[1] * diff[0])
-            best_signed = float(np.copysign(d, cross))
+            cross       = float(seg[0] * diff_perp[1] - seg[1] * diff_perp[0])
+            best_signed = float(np.copysign(np.linalg.norm(diff_perp), cross))
 
     if best_dist == float("inf"):
         return 0.0, 0.0

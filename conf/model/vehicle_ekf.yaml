@@ -49,10 +49,16 @@ fy: 2000.0
 
 # Position (x, y) in Vehicle Frame (m).
 # 0.10 m/step matches the existing KalmanTracker; increase for erratic drivers.
+# Re-validated via scripts/tune_ekf_noise.py (grid search replaying real
+# detections + real per-segment camera calibration against Waymo GT 3D boxes,
+# 3 segments/596 frames): no candidate in a 27-way grid around this value
+# dominates it on pos_rmse_m, vel_rmse_mps, AND id_switch_count at once --
+# every direction trades one metric for another. Kept as-is.
 process_noise_pos: 0.10
 
 # Velocity (vx, vy) in Vehicle Frame (m/s).
 # 1.00 m/s allows the filter to track braking/accelerating manoeuvres.
+# Re-validated alongside process_noise_pos above; same conclusion.
 process_noise_vel: 1.00
 
 # Heading (rad).
@@ -72,6 +78,7 @@ process_noise_length: 0.10
 
 # Ground-projection position uncertainty (m).
 # 0.50 m reflects pinhole projection + ground-plane assumption error at ~20 m.
+# Re-validated via scripts/tune_ekf_noise.py; see process_noise_pos comment.
 measurement_noise_pos: 0.50
 
 # Perspective aspect-ratio uncertainty (dimensionless m/m ratio).

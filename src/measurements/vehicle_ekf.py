@@ -87,6 +87,14 @@ _MIN_LENGTH_M: float = 1.0
 # Range floor: prevents division-by-zero in perspective measurement Jacobian
 _MIN_RANGE_M: float = 0.5
 
+# Chi-squared critical values (p=0.999, standard table) for innovation gating.
+# Degrees of freedom = measurement dimension (2 for position-only, 4 for
+# position + perspective-size). Conservative on purpose: only rejects
+# genuinely implausible measurements (bad detection / wrong association),
+# not merely noisy ones.
+_CHI2_GATE_2DOF: float = 13.816
+_CHI2_GATE_4DOF: float = 18.467
+
 
 class VehicleEKF:
     """
@@ -206,7 +214,7 @@ class VehicleEKF:
         self._P = self._F @ self._P @ self._F.T + self._Q
         return self._x.copy()
 
-    def update(self, meas: KalmanMeasurement) -> None:
+    def update(self, meas: KalmanMeasurement) -> bool:
         """
         Measurement-update: fuse one KalmanMeasurement using EKF equations.
 
@@ -219,17 +227,25 @@ class VehicleEKF:
         meas : KalmanMeasurement
             Output of ``build_kalman_input()``.  Contains validated position
             and (optionally) aspect-ratio observations.
+
+        Returns
+        -------
+        bool
+            True if the measurement passed the chi-squared gate and was
+            fused into the state.  False if it was rejected as a
+            statistical outlier (state/covariance left at the values
+            predicted by the preceding ``predict()`` call).
         """
         if meas.use_size:
-            self._update_4d(meas)
+            return self._update_4d(meas)
         else:
-            self._update_2d(meas.x_gnd, meas.y_gnd)
+            return self._update_2d(meas.x_gnd, meas.y_gnd)
 
     # ------------------------------------------------------------------
     # Private: EKF update implementations
     # ------------------------------------------------------------------
 
-    def _update_4d(self, meas: KalmanMeasurement) -> None:
+    def _update_4d(self, meas: KalmanMeasurement) -> bool:
         """
         Full 4D EKF update using position + perspective size measurements.
 
@@ -238,7 +254,8 @@ class VehicleEKF:
             w_aspect = bbox_w_px / fx  ≈  W_real / x
 
         The aspect-ratio terms are nonlinear in state (x, H, W), which is
-        why we need the EKF Jacobian rather than a plain KF.
+        why we need the EKF Jacobian rather than a plain KF.  The innovation
+        is gated (see _passes_gate) before it is fused.
         """
         x_safe = max(_MIN_RANGE_M, float(self._x[IDX_X]))
 
@@ -256,15 +273,20 @@ class VehicleEKF:
         ], dtype=np.float64)
 
         H = self._measurement_jacobian(x_safe)  # ∂h/∂x evaluated at x̂
-
+        innovation = z_meas - z_pred
         S = H @ self._P @ H.T + self._R
+
+        if not self._passes_gate(innovation, S, _CHI2_GATE_4DOF):
+            return False
+
         K = self._P @ H.T @ np.linalg.inv(S)
-        self._x = self._x + K @ (z_meas - z_pred)
+        self._x = self._x + K @ innovation
         self._P = (self._I - K @ H) @ self._P
 
         self._post_update_clamp()
+        return True
 
-    def _update_2d(self, x_gnd: float, y_gnd: float) -> None:
+    def _update_2d(self, x_gnd: float, y_gnd: float) -> bool:
         """
         2D position-only EKF update using the ground-plane projection.
 
@@ -273,6 +295,7 @@ class VehicleEKF:
 
         Measurement vector: z = [x_gnd, y_gnd]
         Observation matrix H₂ selects [x, y] directly from the state.
+        Gated by the same chi-squared test as _update_4d.
         """
         H2 = np.zeros((2, STATE_DIM), dtype=np.float64)
         H2[MEAS_X, IDX_X] = 1.0
@@ -280,12 +303,24 @@ class VehicleEKF:
 
         z  = np.array([x_gnd, y_gnd], dtype=np.float64)
         zp = H2 @ self._x
+        innovation = z - zp
         S  = H2 @ self._P @ H2.T + self._R[:2, :2]
+
+        if not self._passes_gate(innovation, S, _CHI2_GATE_2DOF):
+            return False
+
         K  = self._P @ H2.T @ np.linalg.inv(S)
-        self._x = self._x + K @ (z - zp)
+        self._x = self._x + K @ innovation
         self._P = (self._I - K @ H2) @ self._P
 
         self._post_update_clamp()
+        return True
+
+    @staticmethod
+    def _passes_gate(innovation: np.ndarray, S: np.ndarray, chi2_threshold: float) -> bool:
+        """Reject an update whose Mahalanobis distance exceeds the chi-squared gate."""
+        mahalanobis_sq = float(innovation @ np.linalg.solve(S, innovation))
+        return mahalanobis_sq <= chi2_threshold
 
     def update_dt(self, new_dt: float) -> None:
         """Re-synchronise the process matrix when the frame interval changes."""

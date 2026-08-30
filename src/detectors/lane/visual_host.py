@@ -15,6 +15,8 @@ owned and executed by ``LaneManager``; the result dict is forwarded to
 
 from __future__ import annotations
 
+import numpy as np
+
 
 class HostLaneStrategy:
     """
@@ -53,6 +55,27 @@ class HostLaneStrategy:
         def _conf(v) -> float:
             return float(v) if v is not None else 0.0
 
+        def _midline(left: list, right: list) -> list:
+            """Derive a centerline as the pointwise average of left/right,
+            resampled onto a shared y-grid (same approach as hdmap_serializer
+            and LaneRelationMeasurer._boundary_midline)."""
+            if len(left) < 2 or len(right) < 2:
+                return []
+            left_arr  = np.array(left,  dtype=np.float64)
+            right_arr = np.array(right, dtype=np.float64)
+            y_lo = float(max(left_arr[:, 1].min(),  right_arr[:, 1].min()))
+            y_hi = float(min(left_arr[:, 1].max(),  right_arr[:, 1].max()))
+            if y_hi <= y_lo:
+                return []
+            left_sorted  = left_arr[np.argsort(left_arr[:, 1])]
+            right_sorted = right_arr[np.argsort(right_arr[:, 1])]
+            y_c = np.linspace(y_lo, y_hi, 30)
+            xl  = np.interp(y_c, left_sorted[:, 1],  left_sorted[:, 0])
+            xr  = np.interp(y_c, right_sorted[:, 1], right_sorted[:, 0])
+            return np.column_stack(
+                [((xl + xr) / 2).astype(np.int32), y_c.astype(np.int32)]
+            ).tolist()
+
         if host_lane_data is not None:
             hl_ll    = _pts(host_lane_data.get("left_lane"))
             hl_rl    = _pts(host_lane_data.get("right_lane"))
@@ -74,13 +97,22 @@ class HostLaneStrategy:
             hl_src   = "none"
             hl_vl    = hl_vr   = False
 
+        valid_left  = hl_vl and len(hl_ll) >= 2
+        valid_right = hl_vr and len(hl_rl) >= 2
+        # A host-lane center is only derivable once BOTH boundaries are valid;
+        # it was previously hardcoded to empty/invalid even when both sides
+        # were present, which silently starved every downstream consumer
+        # that checks "valid_center" (e.g. lane-quality evaluation) of a
+        # signal that LaneRelationMeasurer was already deriving internally.
+        hl_center = _midline(hl_ll, hl_rl) if (valid_left and valid_right) else []
+
         return {
-            "center":            [],
+            "center":            hl_center,
             "left":              hl_ll,
             "right":             hl_rl,
-            "valid_center":      False,
-            "valid_left":        hl_vl and len(hl_ll) >= 2,
-            "valid_right":       hl_vr and len(hl_rl) >= 2,
+            "valid_center":      len(hl_center) >= 2,
+            "valid_left":        valid_left,
+            "valid_right":       valid_right,
             "confidence_center": hl_conf,
             "confidence_left":   hl_lconf,
             "confidence_right":  hl_rconf,
