@@ -326,6 +326,35 @@ def _greedy_assign(cost: np.ndarray) -> list[tuple[int, int]]:
 
 
 # ---------------------------------------------------------------------------
+# Bounding-box smoothing
+# ---------------------------------------------------------------------------
+
+# Default EMA blend weight for the displayed/output box (overridable via
+# cfg.bbox_ema_alpha).  A single noisy detector frame — e.g. a partially
+# occluded vehicle whose box only spans its visible lower half instead of
+# its full height — is damped instead of being reported verbatim, while a
+# genuine size change (approach/recede) still converges within a few frames.
+_BBOX_EMA_ALPHA: float = 0.4
+
+
+def _smooth_bbox(
+    prev_bbox: np.ndarray,
+    new_bbox:  np.ndarray,
+    was_fresh: bool,
+    alpha:     float,
+) -> np.ndarray:
+    """
+    Blend *new_bbox* into *prev_bbox* via EMA, unless the track just came
+    back from a coasting gap (``was_fresh`` False) — a stale pre-gap box
+    should not anchor a fresh detection, or the track would visibly lag on
+    reacquisition.
+    """
+    if not was_fresh:
+        return new_bbox.copy()
+    return alpha * new_bbox + (1.0 - alpha) * prev_bbox
+
+
+# ---------------------------------------------------------------------------
 # TrackManager
 # ---------------------------------------------------------------------------
 
@@ -352,6 +381,7 @@ class TrackManager:
         self._q_pos              = float(cfg.process_noise_pos)
         self._q_vel              = float(cfg.process_noise_vel)
         self._r_pos              = float(cfg.measurement_noise)
+        self._bbox_ema_alpha     = float(getattr(cfg, "bbox_ema_alpha", _BBOX_EMA_ALPHA))
 
         self._tracks:   list[_Track] = []
         self._next_id:  int = 0
@@ -456,7 +486,11 @@ class TrackManager:
             det     = detections[di]
             rw_pos  = rw_positions[di]
 
-            trk.bbox_xyxy       = det.bbox_xyxy
+            trk.bbox_xyxy       = _smooth_bbox(
+                trk.bbox_xyxy, det.bbox_xyxy,
+                was_fresh = trk.misses <= 1,
+                alpha     = self._bbox_ema_alpha,
+            )
             trk.class_id        = det.class_id
             trk.class_name      = det.class_name
             trk.last_confidence = det.confidence

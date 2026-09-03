@@ -106,10 +106,12 @@ class TargetDetector:
 
     Pipeline (per frame)
     --------------------
-    1. Preprocess        — resize to 640×640, normalise [0,1], convert to NCHW.
+    1. Preprocess        — letterbox-resize to 640×640 (aspect-ratio
+                           preserved, grey-padded), normalise [0,1], NCHW.
     2. Inference         — single ONNX forward pass.
-    3. Decode            — transpose output, extract class scores, map cx/cy/w/h
-                           back to original image coordinates.
+    3. Decode            — transpose output, extract class scores, undo the
+                           letterbox transform to map cx/cy/w/h back to
+                           original image coordinates.
     4. Confidence filter — drop detections below threshold (0.25 by default).
     5. Class filter      — keep only whitelisted COCO class IDs; disabled when
                            ``class_whitelist`` is empty (accept all 80 classes).
@@ -162,9 +164,9 @@ class TargetDetector:
         if img_bgr is None or img_bgr.size == 0:
             return []
 
-        blob, scale_x, scale_y = self._preprocess(img_bgr)
+        blob, ratio, dw, dh = self._preprocess(img_bgr)
         raw = self._session.run(None, {self._input_name: blob})[0]
-        detections = self._postprocess(raw, scale_x, scale_y)
+        detections = self._postprocess(raw, ratio, dw, dh)
         detections.sort(key=lambda d: d.confidence, reverse=True)
         return detections
 
@@ -174,37 +176,53 @@ class TargetDetector:
 
     def _preprocess(
         self, img_bgr: np.ndarray
-    ) -> tuple[np.ndarray, float, float]:
+    ) -> tuple[np.ndarray, float, float, float]:
         """
-        Resize, normalise, and convert to NCHW float32.
+        Letterbox-resize (aspect-ratio preserving, grey-padded) to
+        input_size x input_size, normalise, and convert to NCHW float32.
+
+        A direct stretch-resize to a square distorts every object's aspect
+        ratio non-uniformly on non-square frames (e.g. 1920x1280 Waymo),
+        which is outside YOLOv8's training distribution (Ultralytics always
+        letterboxes) and was the root cause of undersized/half-height boxes.
 
         Returns
         -------
-        blob : np.ndarray, shape (1, 3, 640, 640), float32
-        scale_x : float  — factor to map 640-space x → original image x
-        scale_y : float  — factor to map 640-space y → original image y
+        blob : np.ndarray, shape (1, 3, input_size, input_size), float32
+        ratio : float  — uniform scale factor applied before padding
+        dw, dh : float — padding added on each axis (pixels, network space)
         """
         h, w = img_bgr.shape[:2]
-        scale_x = w / self._input_size
-        scale_y = h / self._input_size
+        s     = self._input_size
+        ratio = min(s / w, s / h)
+        rw, rh = int(round(w * ratio)), int(round(h * ratio))
+        dw, dh = (s - rw) / 2.0, (s - rh) / 2.0
 
-        resized = cv2.resize(img_bgr, (self._input_size, self._input_size))
-        rgb     = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-        blob    = (rgb.astype(np.float32) / 255.0)
-        blob    = np.transpose(blob, (2, 0, 1))[np.newaxis]  # NCHW
-        return blob, scale_x, scale_y
+        resized = cv2.resize(img_bgr, (rw, rh), interpolation=cv2.INTER_LINEAR)
+        top,    bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
+        left,   right  = int(round(dw - 0.1)), int(round(dw + 0.1))
+        padded  = cv2.copyMakeBorder(
+            resized, top, bottom, left, right,
+            cv2.BORDER_CONSTANT, value=(114, 114, 114),
+        )
+
+        rgb  = cv2.cvtColor(padded, cv2.COLOR_BGR2RGB)
+        blob = (rgb.astype(np.float32) / 255.0)
+        blob = np.transpose(blob, (2, 0, 1))[np.newaxis]  # NCHW
+        return blob, ratio, dw, dh
 
     def _postprocess(
         self,
         raw_output: np.ndarray,
-        scale_x: float,
-        scale_y: float,
+        ratio: float,
+        dw: float,
+        dh: float,
     ) -> list[Detection]:
         """
         Decode the YOLOv8n ONNX output tensor into Detection objects.
 
         YOLOv8n ONNX output shape: [1, 84, 8400]
-        Channels 0-3:  cx, cy, w, h (in 640-space pixels)
+        Channels 0-3:  cx, cy, w, h (in letterboxed 640-space pixels)
         Channels 4-83: per-class confidence scores (COCO 80 classes)
         """
         predictions = raw_output[0].T           # [8400, 84]
@@ -228,15 +246,17 @@ class TargetDetector:
         confidences = confidences[mask]
         class_ids   = class_ids[mask]
 
-        # cx,cy,w,h → x1,y1,x2,y2 (still in 640-space)
+        # cx,cy,w,h → x1,y1,x2,y2 (still in letterboxed 640-space)
         x1 = boxes_raw[:, 0] - boxes_raw[:, 2] / 2.0
         y1 = boxes_raw[:, 1] - boxes_raw[:, 3] / 2.0
         x2 = boxes_raw[:, 0] + boxes_raw[:, 2] / 2.0
         y2 = boxes_raw[:, 1] + boxes_raw[:, 3] / 2.0
 
-        # Scale to original image dimensions
-        x1 = x1 * scale_x;  x2 = x2 * scale_x
-        y1 = y1 * scale_y;  y2 = y2 * scale_y
+        # Undo letterbox: remove padding offset, then the uniform scale
+        # (a single ratio, not independent x/y factors, since the resize
+        # was aspect-ratio preserving).
+        x1 = (x1 - dw) / ratio;  x2 = (x2 - dw) / ratio
+        y1 = (y1 - dh) / ratio;  y2 = (y2 - dh) / ratio
         boxes_xyxy = np.column_stack([x1, y1, x2, y2]).astype(np.float32)
 
         # NMS via OpenCV DNN — run independently per COCO class.

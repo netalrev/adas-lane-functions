@@ -45,6 +45,16 @@ reacquire_dist_px: 100
 # Waymo Open Dataset is sampled at 10 Hz → dt = 0.1 s.
 default_dt: 0.1
 
+# ── Bounding-box smoothing ────────────────────────────────────────────────────
+# EMA blend weight applied to the output/displayed box on each matched frame:
+#   box = bbox_ema_alpha * new_detection + (1 - bbox_ema_alpha) * previous_box
+# Damps single-frame detector glitches (e.g. a partially-occluded vehicle
+# reported at half its true height) without materially lagging genuine size
+# changes as a vehicle approaches or recedes.  Skipped (raw box used as-is)
+# on the first match after a coasting gap, since the pre-gap box is stale.
+# Set to 1.0 to disable smoothing (always snap to the raw detection).
+bbox_ema_alpha: 0.4
+
 # ── Kalman filter noise parameters ───────────────────────────────────────────
 # Process noise for position components (x, y in vehicle frame, metres).
 # Higher values allow the filter to track faster lateral manoeuvres.

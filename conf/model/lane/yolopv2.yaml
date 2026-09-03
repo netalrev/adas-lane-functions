@@ -50,6 +50,24 @@ min_drivable_pix: 10
 # on urban light artefacts and wet-road reflections.
 ll_conf_threshold: 0.20
 
+# ── Temporal smoothing (drivable-path center/left/right, host-lane left/right) ──
+
+# EMA weight applied to the freshly-observed polyline on each frame:
+#   smoothed = lane_ema_alpha * new + (1 - lane_ema_alpha) * previous_smoothed
+# Deliberately NEW-frame-dominant (>= 0.5): an earlier version of this module
+# blended raw polynomial coefficients at alpha=0.25 (75% history weight) and
+# was removed after it "ghosted" -- visibly lagged behind the true lane/mask
+# during ego-rotation. 0.6 damps ordinary per-frame jitter while limiting lag
+# to roughly one frame under real motion.
+lane_ema_alpha: 0.6
+
+# Median per-row pixel shift (at 1920px image width) above which the new
+# frame is treated as a genuine scene change (fast turn, lane change,
+# reacquisition after a gap) rather than jitter, and smoothing is bypassed
+# for that frame -- the guard that keeps lane_ema_alpha from reintroducing
+# the ghosting failure described above.
+lane_max_shift_px: 70.0
+
 # ── Output key control ───────────────────────────────────────────────────────
 # Which canonical output keys this plugin publishes.
 # "all"       -> drivable_raw, drivable_path, host_raw, host_lane

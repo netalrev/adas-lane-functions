@@ -52,8 +52,75 @@ from ._backend import LaneDetectionResult
 # YOLOPv2 backend (moved from src/models/lane_detector.py)
 # ---------------------------------------------------------------------------
 
-# EMA alpha for polynomial coefficients (shared with IPMLaneDetector).
-_COEFF_EMA_ALPHA: float = 0.25
+# Default temporal-smoothing weight for freshly-observed polyline points
+# (drivable-path center/left/right, host-lane left/right).  `new` gets this
+# much weight, history gets the rest -- see _smooth_polyline_temporal().
+# Deliberately NEW-frame-dominant: an earlier version of this module EMA'd
+# raw polynomial coefficients at alpha=0.25 (75% history weight) and was
+# removed after it "ghosted" -- lagged visibly behind the true lane/mask
+# during ego-rotation, because a blend of two frames' coefficients does not
+# correspond to any physically-real intermediate curve.  0.6 damps ordinary
+# per-frame jitter while limiting lag to roughly one frame under real motion,
+# and the divergence bypass below is the safety net for larger, fast changes.
+_LANE_EMA_ALPHA: float = 0.6
+
+# Median per-row pixel shift above which _smooth_polyline_temporal() treats
+# the new frame as a genuine scene change (fast ego-rotation, lane change,
+# reacquisition after a gap) rather than ordinary jitter, and returns the
+# new polyline unblended -- this is the guard that avoids reintroducing the
+# ghosting failure mode described above.
+_LANE_MAX_SHIFT_PX: float = 70.0
+
+
+def _smooth_polyline_temporal(
+    prev:         Optional[np.ndarray],
+    new:          Optional[np.ndarray],
+    alpha:        float,
+    max_shift_px: float,
+) -> Optional[np.ndarray]:
+    """
+    Blend a freshly-computed (x, y) polyline with the previous frame's
+    smoothed result to damp frame-to-frame jitter.
+
+    `new` and `prev` are (N, 2) / (M, 2) arrays sorted bottom-to-top (y
+    descending), as produced by ``_fit_poly``, ``_mask_to_centerline``, and
+    ``_mask_to_boundaries``.  History is resampled onto ``new``'s own y-grid
+    via linear interpolation (handles the two frames having different
+    lengths/vertical extents, which is expected -- the tracker returns
+    exactly as many rows as it observed each frame).  Rows outside history's
+    covered range have no prior estimate and are left as-is.
+
+    Guard against ghosting: if the median shift between `new` and the
+    resampled history exceeds `max_shift_px`, history is stale relative to
+    the current frame (fast ego-rotation, a lane change, or reacquisition
+    after several skipped frames) and blending toward it would visibly lag
+    the real geometry, so `new` is returned unchanged instead.
+    """
+    if new is None or len(new) == 0 or prev is None or len(prev) < 2:
+        return new
+
+    new_y, new_x   = new[:, 1].astype(np.float64),  new[:, 0].astype(np.float64)
+    prev_y, prev_x = prev[:, 1].astype(np.float64), prev[:, 0].astype(np.float64)
+
+    # np.interp requires ascending xp; polylines here are sorted descending.
+    order = np.argsort(prev_y)
+    prev_x_on_new_grid = np.interp(
+        new_y, prev_y[order], prev_x[order], left=np.nan, right=np.nan,
+    )
+
+    has_history = ~np.isnan(prev_x_on_new_grid)
+    if not has_history.any():
+        return new
+
+    shift = np.abs(new_x[has_history] - prev_x_on_new_grid[has_history])
+    if float(np.median(shift)) > max_shift_px:
+        return new
+
+    smoothed_x = new_x.copy()
+    smoothed_x[has_history] = (
+        alpha * new_x[has_history] + (1.0 - alpha) * prev_x_on_new_grid[has_history]
+    )
+    return np.column_stack([smoothed_x, new_y]).astype(new.dtype)
 
 class YOLOPv2DrivableDetector:
     """
@@ -115,8 +182,9 @@ class YOLOPv2DrivableDetector:
         min_drivable_pix: int   = 30,
         host_conf_thresh: float = 0.35,
         ll_threshold:     float = 0.30,
-        track_half:       int   = 80,
-        coeff_ema_alpha:  float = 0.25,
+        track_half:        int   = 80,
+        lane_ema_alpha:    float = _LANE_EMA_ALPHA,
+        lane_max_shift_px: float = _LANE_MAX_SHIFT_PX,
     ) -> None:
         try:
             import onnxruntime as ort
@@ -127,11 +195,12 @@ class YOLOPv2DrivableDetector:
                 "pip install onnxruntime-gpu         (CUDA)"
             ) from exc
 
-        self.image_width       = image_width
-        self.image_height      = image_height
-        self.min_drivable_pix  = min_drivable_pix
-        self._track_half       = track_half
-        self._coeff_ema_alpha  = coeff_ema_alpha
+        self.image_width        = image_width
+        self.image_height       = image_height
+        self.min_drivable_pix   = min_drivable_pix
+        self._track_half        = track_half
+        self._lane_ema_alpha    = lane_ema_alpha
+        self._lane_max_shift_px = lane_max_shift_px
 
         providers = (
             ["CUDAExecutionProvider", "CPUExecutionProvider"]
@@ -177,12 +246,18 @@ class YOLOPv2DrivableDetector:
         self._lane_cache_age: int = 0
         self._LANE_MAX_PERSIST: int = 25
 
-        # EMA coefficient cache — lane-line polynomials only.
-        # Drivable-area centre and boundary paths now use the smoothed-polyline
-        # approach (no polynomial fitting, no temporal blending in pixel space).
-        self._prev_ll_coeffs: dict[str, Optional[np.ndarray]] = {
+        # Smoothed-polyline history — used by _smooth_polyline_temporal() to
+        # damp frame-to-frame jitter in the published geometry.  Lane-line
+        # (host lane) and drivable-area (drivable path) tracks are kept
+        # separate since they come from different mask heads.
+        self._prev_ll_points: dict[str, Optional[np.ndarray]] = {
             "left":  None,
             "right": None,
+        }
+        self._prev_dp_points: dict[str, Optional[np.ndarray]] = {
+            "center": None,
+            "left":   None,
+            "right":  None,
         }
 
         # Trapezoidal forward-frustum ROI mask (lazy, rebuilt on size change).
@@ -202,24 +277,25 @@ class YOLOPv2DrivableDetector:
 
         Called when the ego vehicle speed drops below the minimum threshold
         (e.g. stopped at an intersection) so that crosswalk / stop-line
-        geometry does not corrupt the polynomial EMA that will be used once
+        geometry does not corrupt the smoothed history that will be used once
         the vehicle starts moving again.
         """
         self._cached_lane_result = None
         self._lane_cache_age     = 0
-        self._prev_ll_coeffs     = {"left": None, "right": None}
+        self._prev_ll_points     = {"left": None, "right": None}
 
     def reset_segment_state(self) -> None:
         """
         Flush all inter-frame EMA and persistence caches.
 
         Call once at the start of each new TFRecord segment so that stale
-        polynomial coefficients and lane-persistence state do not bleed into
+        smoothed geometry and lane-persistence state do not bleed into
         the first frames of the new recording.
         """
         self._cached_lane_result = None
         self._lane_cache_age     = 0
-        self._prev_ll_coeffs     = {"left": None, "right": None}
+        self._prev_ll_points     = {"left": None, "right": None}
+        self._prev_dp_points     = {"center": None, "left": None, "right": None}
 
     def detect_full(
         self,
@@ -695,6 +771,18 @@ class YOLOPv2DrivableDetector:
         left_img  = _fit_poly(left_raw,  "left")
         right_img = _fit_poly(right_raw, "right")
 
+        # Damp frame-to-frame jitter against the previous frame's smoothed
+        # result (see _smooth_polyline_temporal's docstring for the guard
+        # against the ghosting failure this module previously removed).
+        left_img  = _smooth_polyline_temporal(
+            self._prev_ll_points["left"],  left_img,
+            self._lane_ema_alpha, self._lane_max_shift_px,
+        )
+        right_img = _smooth_polyline_temporal(
+            self._prev_ll_points["right"], right_img,
+            self._lane_ema_alpha, self._lane_max_shift_px,
+        )
+
         # Zero out tracker-coverage confidence for any side whose polynomial
         # fit failed.  A non-zero confidence with no geometry is misleading
         # and causes host_lane to report high confidence_left/right while
@@ -758,6 +846,13 @@ class YOLOPv2DrivableDetector:
                 r_xs = np.interp(c_ys, r_ys[::-1], right_img[:, 0][::-1].astype(np.float64))
                 c_xs = (l_xs + r_xs) / 2.0
                 center = np.column_stack([c_xs.astype(np.int32), c_ys.astype(np.int32)])
+
+        # Only persist history on a side that actually published geometry
+        # this frame -- a guard-rejected or unfitted side leaves the last
+        # known-good smoothed line in place so the next successful frame can
+        # still blend against recent history instead of starting from None.
+        if left_img  is not None: self._prev_ll_points["left"]  = left_img
+        if right_img is not None: self._prev_ll_points["right"] = right_img
 
         return LaneDetectionResult(
             left_lane        = left_img,
@@ -854,7 +949,18 @@ class YOLOPv2DrivableDetector:
         xs_left  = (xs_ctr - half_px).clip(0, w - 1).astype(np.int32)
         xs_right = (xs_ctr + half_px).clip(0, w - 1).astype(np.int32)
 
-        return np.column_stack([xs_left, ys_out]), np.column_stack([xs_right, ys_out])
+        left_pts  = _smooth_polyline_temporal(
+            self._prev_dp_points["left"],  np.column_stack([xs_left,  ys_out]),
+            self._lane_ema_alpha, self._lane_max_shift_px,
+        )
+        right_pts = _smooth_polyline_temporal(
+            self._prev_dp_points["right"], np.column_stack([xs_right, ys_out]),
+            self._lane_ema_alpha, self._lane_max_shift_px,
+        )
+        self._prev_dp_points["left"]  = left_pts
+        self._prev_dp_points["right"] = right_pts
+
+        return left_pts, right_pts
 
     def _mask_to_centerline(
         self,
@@ -916,7 +1022,13 @@ class YOLOPv2DrivableDetector:
         xs_smooth = np.convolve(xs_raw, np.ones(_win) / _win, mode="valid").clip(0, w - 1)
         ys_smooth = ys_raw[_trim : len(ys_raw) - _trim]
 
-        return np.column_stack([xs_smooth.astype(np.int32), ys_smooth.astype(np.int32)])
+        center_pts = _smooth_polyline_temporal(
+            self._prev_dp_points["center"],
+            np.column_stack([xs_smooth.astype(np.int32), ys_smooth.astype(np.int32)]),
+            self._lane_ema_alpha, self._lane_max_shift_px,
+        )
+        self._prev_dp_points["center"] = center_pts
+        return center_pts
 
     def _apply_forward_frustum(self, mask: np.ndarray) -> np.ndarray:
         """
@@ -1068,7 +1180,8 @@ class YOLOPv2Plugin(AbstractLaneDetector):
                 host_conf_thresh = host_conf,
                 ll_threshold     = float(getattr(yolopv2_cfg, "ll_conf_threshold", 0.30)),
                 track_half       = int(getattr(yolopv2_cfg, "track_half", 80)),
-                coeff_ema_alpha  = float(getattr(yolopv2_cfg, "coeff_ema_alpha", 0.25)),
+                lane_ema_alpha    = float(getattr(yolopv2_cfg, "lane_ema_alpha", _LANE_EMA_ALPHA)),
+                lane_max_shift_px = float(getattr(yolopv2_cfg, "lane_max_shift_px", _LANE_MAX_SHIFT_PX)),
             )
             log.info(
                 "YOLOPv2Plugin: ONNX loaded  ll_thresh=%.2f  host_conf=%.2f  contributes=%s",

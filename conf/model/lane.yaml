@@ -71,7 +71,8 @@ yolopv2:
   min_drivable_pix:  10    # min drivable pixels per image row to include in centroid [px]
   ll_conf_threshold: 0.20  # lane-line sigmoid threshold [0-1]; lower = more sensitive
   track_half:        80    # per-row tracker window half-width [px]; tighter → less adjacent-lane drift
-  coeff_ema_alpha:   0.25  # EMA weight for fresh polynomial coefficients [0-1]; lower → more temporal smoothing
+  lane_ema_alpha:    0.6   # temporal smoothing weight for fresh points [0-1]; lower → more smoothing (see yolopv2_drivable.py's _LANE_EMA_ALPHA for why this is new-frame-dominant, not history-dominant)
+  lane_max_shift_px: 70.0  # median px shift above which history is treated as stale and smoothing is bypassed for that frame (fast turns, lane changes, reacquisition)
   min_speed_mps:     3.0   # below this speed [m/s] host lane is suppressed (intersection / stop protection)
 
   # Which output keys this plugin publishes.  See ipm.contributes for values.
